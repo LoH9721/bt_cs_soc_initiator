@@ -1,0 +1,18 @@
+# Simplicity Studio build outputs
+/GNU ARM v12.2.1 - Default/
+/Debug/
+/Release/
+
+# Bundled SDK copy (external/generated dependency, not project source)
+/simplicity_sdk_2025.6.0/
+
+# Simplicity Studio local caches
+/.pdm/
+/.uceditor/
+
+# Temporary and OS files
+*.log
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store

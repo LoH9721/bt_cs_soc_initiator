@@ -1,0 +1,204 @@
+/*******************************************************
+  * Name    :Routine_Cfg.c
+  * Function:Routine config table for BLE project (10 routines)
+  *******************************************************/
+/*-------------include file---------------------------*/
+#include "Routine_Cfg.h"
+/*-------------extern BLE functions--------------------*/
+extern void phone_comm_switch_to_secondary(void);
+extern void key_gatt_proto_reset_pairing(void);
+extern void phone_comm_disconnect_for_factory_reset(void);
+extern void app_ble_factory_reset_bonds_key(void);
+
+/* CAN auth routines (declared elsewhere in BLE project) */
+extern void can_auth_verify_binding(void);
+extern void can_auth_clear_binding(void);
+extern void can_auth_init_counter(void);
+extern void can_auth_mac64_test(void);
+extern void can_auth_replay_test(void);
+extern uint8_t can_auth_read_test_result(void);
+
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :Routine_0203PreProgCheck
+  *******************************************************/
+static Return_Type Routine_0203PreProgCheck(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        p_msgContext->p_txData[0] = 0x00; /* precondition OK */
+        p_msgContext->txLen       = 1;
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_0301PhonePairing
+  *******************************************************/
+static Return_Type Routine_0301PhonePairing(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        phone_comm_switch_to_secondary();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_0302KeyPairing
+  *******************************************************/
+static Return_Type Routine_0302KeyPairing(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        key_gatt_proto_reset_pairing();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_0303DeletePhone
+  *******************************************************/
+static Return_Type Routine_0303DeletePhone(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        phone_comm_disconnect_for_factory_reset();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_0304DeleteKey
+  *******************************************************/
+static Return_Type Routine_0304DeleteKey(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        app_ble_factory_reset_bonds_key();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_D002VerifyBinding
+  *******************************************************/
+static Return_Type Routine_D002VerifyBinding(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        can_auth_verify_binding();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_D003ClearBinding
+  *******************************************************/
+static Return_Type Routine_D003ClearBinding(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        can_auth_clear_binding();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_D004InitCounter
+  *******************************************************/
+static Return_Type Routine_D004InitCounter(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        can_auth_init_counter();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_D005Mac64Test
+  *******************************************************/
+static Return_Type Routine_D005Mac64Test(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        can_auth_mac64_test();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_D006ReplayTest
+  *******************************************************/
+static Return_Type Routine_D006ReplayTest(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        can_auth_replay_test();
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Routine_D007ReadTestResult
+  *******************************************************/
+static Return_Type Routine_D007ReadTestResult(Uds_DcmOpStatus_Type opStatus, Routine_MsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    (void)opStatus;
+    (void)p_errCode;
+    if (p_msgContext->ctrType == ROUTINE_CTR_START)
+    {
+        p_msgContext->p_txData[0] = can_auth_read_test_result();
+        p_msgContext->txLen       = 1;
+    }
+    return RET_OK;
+}
+
+// clang-format off
+/*-------------Routine config table-------------------*/
+const Routine_Cfg_Type g_RoutineCfgList[ROUTINE_CFG_LIST_NUM] =
+{
+    /* 0x0203: Pre-programming check */
+    {0x0203, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_0203PreProgCheck},
+    /* 0x0301: Phone pairing trigger */
+    {0x0301, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_0301PhonePairing},
+    /* 0x0302: Key pairing trigger */
+    {0x0302, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_0302KeyPairing},
+    /* 0x0303: Delete phone info */
+    {0x0303, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_0303DeletePhone},
+    /* 0x0304: Delete key info */
+    {0x0304, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_0304DeleteKey},
+    /* 0xD002: CAN auth - verify binding */
+    {0xD002, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_D002VerifyBinding},
+    /* 0xD003: CAN auth - clear binding */
+    {0xD003, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_D003ClearBinding},
+    /* 0xD004: CAN auth - init counter */
+    {0xD004, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_D004InitCounter},
+    /* 0xD005: CAN auth - MAC64 test */
+    {0xD005, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_D005Mac64Test},
+    /* 0xD006: CAN auth - replay test */
+    {0xD006, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_D006ReplayTest},
+    /* 0xD007: CAN auth - read test result */
+    {0xD007, 0, UDS_SESSION_EXTEND, UDS_DCM_SEC_LEV_1, FALSE, FALSE, ROUTINE_EXE_DIRECT, Routine_D007ReadTestResult},
+};

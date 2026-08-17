@@ -1,0 +1,17 @@
+* text=auto
+
+*.c text
+*.h text
+*.def text
+*.xml text
+*.json text
+*.btconf text
+*.slcp text
+*.slpb text
+*.slps text
+*.pintool text
+*.prefs text
+*.project text
+
+*.png binary
+*.pdf binary

@@ -1,0 +1,961 @@
+/*******************************************************
+  * Name    :CanTp.c
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+/*-------------include file---------------------------*/
+#include "CanTp_Cfg.h"
+/*-------------variable statement---------------------*/
+static CanTp_State_Type    g_CanTpState;
+static CanTp_Result_Type   g_CanTpResult;
+static CanTp_TimeCtr_Type  g_CanTpTimeCtr;
+static CanTp_TimeTick_Type g_CanTpTimeTick;
+static CanTp_RxState_Type  g_CanTpRxState;
+static CanTp_TxState_Type  g_CanTpTxState;
+static CanTp_RxType_Type   g_CanTpRxType;
+static CanTp_TxType_Type   g_CanTpTxType;
+static CanTp_MsgCtr_Type   g_CanTpRxMsgCtr;
+static CanTp_MsgCtr_Type   g_CanTpTxMsgCtr;
+static Can_Type            g_CanTpRxMsg;
+static Can_Type            g_CanTpTxMsg;
+static CanTp_RxData_Type   g_CanTpRxData;
+static CanTp_TxData_Type   g_CanTpTxData;
+/*-------------function statement---------------------*/
+/*******************************************************
+  * Name    :TimerCtrl
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void CanTp_TimerCtrl(void)
+{
+    if (g_CanTpTimeCtr.bits.N_Bs == TRUE)
+    {
+        if (g_CanTpTimeTick.N_Bs < 0xFFFF)
+        {
+            g_CanTpTimeTick.N_Bs++;
+        }
+    }
+
+    if (g_CanTpTimeCtr.bits.N_Cr == TRUE)
+    {
+        if (g_CanTpTimeTick.N_Cr < 0xFFFF)
+        {
+            g_CanTpTimeTick.N_Cr++;
+        }
+    }
+
+    if (g_CanTpTimeCtr.bits.S_Tmin == TRUE)
+    {
+        if (g_CanTpTimeTick.S_Tmin < 0xFFFF)
+        {
+            g_CanTpTimeTick.S_Tmin++;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_VariableInit
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_VariableInit(void)
+{
+    g_CanTpResult              = CANTP_N_IDLE;
+
+    g_CanTpTimeCtr.bits.N_Bs   = FALSE;
+    g_CanTpTimeCtr.bits.N_Cr   = FALSE;
+    g_CanTpTimeCtr.bits.S_Tmin = FALSE;
+
+    g_CanTpTimeTick.N_Bs       = 0;
+    g_CanTpTimeTick.N_Cr       = 0;
+    g_CanTpTimeTick.S_Tmin     = 0;
+
+    g_CanTpRxState             = CANTP_RX_STATE_IDLE;
+    g_CanTpTxState             = CANTP_TX_STATE_IDLE;
+
+    g_CanTpRxType              = CANTP_RX_NULL_NPCI;
+    g_CanTpTxType              = CANTP_TX_NULL_NPCI;
+
+    g_CanTpRxMsgCtr.FS         = CANTP_FS_NULL;
+    g_CanTpRxMsgCtr.BS         = 0;
+    g_CanTpRxMsgCtr.BSmax      = CANTP_BS_MAX;
+    g_CanTpRxMsgCtr.SN         = 0;
+    g_CanTpRxMsgCtr.STmin      = CANTP_N_S_TMIN_TIME;
+    g_CanTpRxMsgCtr.point      = 0;
+
+    g_CanTpTxMsgCtr.FS         = CANTP_FS_NULL;
+    g_CanTpTxMsgCtr.BS         = 0;
+    g_CanTpTxMsgCtr.BSmax      = 0;
+    g_CanTpTxMsgCtr.SN         = 0;
+    g_CanTpTxMsgCtr.STmin      = 0;
+    g_CanTpTxMsgCtr.point      = 0;
+
+    g_CanTpRxMsg.frame         = CAN;
+    g_CanTpRxMsg.id            = 0x00;
+    g_CanTpRxMsg.len           = 0;
+    CanTp_Fill(g_CanTpRxMsg.buff, 0x00, 64);
+
+    g_CanTpTxMsg.frame = CAN;
+    g_CanTpTxMsg.id    = 0x00;
+    g_CanTpTxMsg.len   = 0;
+    CanTp_Fill(g_CanTpTxMsg.buff, 0x00, 64);
+
+    g_CanTpRxData.frame = CAN;
+    g_CanTpRxData.id    = 0x00;
+    g_CanTpRxData.len   = 0;
+    CanTp_Fill(g_CanTpRxData.buff, 0x00, CANTP_RX_BUFF_NB);
+
+    g_CanTpTxData.frame = CAN;
+    g_CanTpTxData.id    = 0x00;
+    g_CanTpTxData.len   = 0;
+    CanTp_Fill(g_CanTpTxData.buff, 0x00, CANTP_TX_BUFF_NB);
+}
+
+/*******************************************************
+  * Name    :CanTp_GetTxMsgDlc
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static uint8_t CanTp_GetTxMsgDlc(uint8_t len)
+{
+    if (len > 48)
+    {
+        return (uint8_t)64;
+    }
+
+    if (len > 32)
+    {
+        return (uint8_t)48;
+    }
+
+    if (len > 24)
+    {
+        return (uint8_t)32;
+    }
+
+    if (len > 20)
+    {
+        return (uint8_t)24;
+    }
+
+    if (len > 16)
+    {
+        return (uint8_t)20;
+    }
+
+    if (len > 12)
+    {
+        return (uint8_t)16;
+    }
+
+    if (len > 8)
+    {
+        return (uint8_t)12;
+    }
+
+    return (uint8_t)8;
+}
+
+/*******************************************************
+  * Name    :CanTp_StartRxData
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_StartRxData(CanTp_RxState_Type state)
+{
+    g_CanTpRxState           = state;
+    g_CanTpTimeCtr.bits.N_Cr = FALSE;
+    g_CanTpTimeTick.N_Cr     = 0;
+    g_CanTpRxMsgCtr.SN       = 0;
+    g_CanTpRxMsgCtr.BS       = 0;
+    g_CanTpRxMsgCtr.point    = 0;
+}
+
+/*******************************************************
+  * Name    :CanTp_StartTxData
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_StartTxData(CanTp_TxState_Type state)
+{
+    g_CanTpTxState             = state;
+    g_CanTpTimeCtr.bits.N_Bs   = FALSE;
+    g_CanTpTimeTick.N_Bs       = 0;
+    g_CanTpTimeCtr.bits.S_Tmin = FALSE;
+    g_CanTpTimeTick.S_Tmin     = 0;
+    g_CanTpTxMsgCtr.SN         = 0;
+    g_CanTpTxMsgCtr.BS         = 0;
+    g_CanTpTxMsgCtr.BSmax      = 0;
+    g_CanTpTxMsgCtr.STmin      = 0;
+    g_CanTpTxMsgCtr.point      = 0;
+}
+
+/*******************************************************
+  * Name    :CanTp_EndRxData
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_EndRxData(CanTp_Result_Type result)
+{
+    g_CanTpTimeCtr.bits.N_Cr = FALSE;
+    g_CanTpTimeTick.N_Cr     = 0;
+    g_CanTpRxMsgCtr.SN       = 0;
+    g_CanTpRxMsgCtr.BS       = 0;
+    g_CanTpRxMsgCtr.point    = 0;
+    g_CanTpResult            = result;
+    if (g_CanTpResult == CANTP_N_OK)
+    {
+        g_CanTpRxState = CANTP_RX_STATE_OK;
+    }
+    else
+    {
+        g_CanTpRxState = CANTP_RX_STATE_IDLE;
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_EndTxData
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_EndTxData(CanTp_Result_Type result)
+{
+    g_CanTpTimeCtr.bits.N_Bs   = FALSE;
+    g_CanTpTimeTick.N_Bs       = 0;
+    g_CanTpTimeCtr.bits.S_Tmin = FALSE;
+    g_CanTpTimeTick.S_Tmin     = 0;
+    g_CanTpTxMsgCtr.SN         = 0;
+    g_CanTpTxMsgCtr.BS         = 0;
+    g_CanTpTxMsgCtr.BSmax      = 0;
+    g_CanTpTxMsgCtr.STmin      = 0;
+    g_CanTpTxMsgCtr.point      = 0;
+    g_CanTpResult              = result;
+    g_CanTpTxState             = CANTP_TX_STATE_IDLE;
+}
+
+/*******************************************************
+  * Name    :CanTp_RxMsgDisposal
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_RxMsgDisposal(void)
+{
+    if (CanTp_ReadRxMsg(&g_CanTpRxMsg.frame, &g_CanTpRxMsg.id, g_CanTpRxMsg.buff, &g_CanTpRxMsg.len))
+    {
+        if (((g_CanTpRxMsg.id == CANTP_FUNC_ADDR_ID) || (g_CanTpRxMsg.id == CANTP_PHYS_ADDR_ID)))
+        {
+            if (g_CanTpRxMsg.frame == CAN)
+            {
+                g_CanTpRxType = (CanTp_RxType_Type)(g_CanTpRxMsg.buff[0] >> 4);
+            }
+            else
+            {
+                if ((g_CanTpRxMsg.len == 8) || (g_CanTpRxMsg.len == 12) || (g_CanTpRxMsg.len == 16)
+                    || (g_CanTpRxMsg.len == 20) || (g_CanTpRxMsg.len == 24) || (g_CanTpRxMsg.len == 32)
+                    || (g_CanTpRxMsg.len == 48) || (g_CanTpRxMsg.len == 64))
+                {
+                    g_CanTpRxType = (CanTp_RxType_Type)(g_CanTpRxMsg.buff[0] >> 4);
+                }
+            }
+        }
+    }
+    else
+    {
+        g_CanTpRxType = CANTP_RX_NULL_NPCI;
+    }
+    if (g_CanTpRxState == CANTP_RX_STATE_CF)
+    {
+        if (g_CanTpTimeTick.N_Cr >= CANTP_N_CR_TIME)
+        {
+            CanTp_EndRxData(CANTP_N_TIMEOUT_CR);
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_TxMsgDisposal
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_TxMsgDisposal(void)
+{
+    uint8_t offset = 0;
+
+    if (g_CanTpTxState != CANTP_TX_STATE_IDLE)
+    {
+        offset = g_CanTpTxData.frame == CAN ? 7 : 62;
+        if (g_CanTpTxData.len <= offset)
+        {
+            g_CanTpTxType = CANTP_TX_SF_NPCI;
+        }
+        else
+        {
+            offset = g_CanTpTxData.frame == CAN ? 6 : 62;
+            if (g_CanTpTxMsgCtr.point >= offset)
+            {
+                g_CanTpTxType = CANTP_TX_CF_NPCI;
+            }
+            else
+            {
+                g_CanTpTxType = CANTP_TX_FF_NPCI;
+            }
+        }
+        if (g_CanTpTimeTick.N_Bs >= CANTP_N_BS_TIME)
+        {
+            CanTp_EndTxData(CANTP_N_TIMEOUT_BS);
+        }
+    }
+    else
+    {
+        if (g_CanTpTxType != CANTP_TX_FC_NPCI)
+        {
+            g_CanTpTxType = CANTP_TX_NULL_NPCI;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_PushRxData
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_PushRxData(Frame_Type frame, uint32_t id, uint8_t *p_buff, uint16_t len)
+{
+    g_CanTpRxData.frame = frame;
+    g_CanTpRxData.id    = id;
+    CanTp_Copy(&g_CanTpRxData.buff[g_CanTpRxMsgCtr.point], p_buff, len);
+    g_CanTpRxMsgCtr.point += len;
+}
+
+/*******************************************************
+  * Name    :CanTp_PushTxData
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_PushTxData(Frame_Type frame, uint32_t id, uint8_t *p_buff, uint16_t len)
+{
+    CanTp_Fill(g_CanTpTxMsg.buff, CANTP_BYTE_FILL_VALUE, 64);
+    g_CanTpTxMsg.frame = frame;
+    g_CanTpTxMsg.id    = id;
+    switch (g_CanTpTxType)
+    {
+        case CANTP_TX_SF_NPCI:
+            if (len <= 7)
+            {
+                g_CanTpTxMsg.len     = CanTp_GetTxMsgDlc(len + 1);
+                g_CanTpTxMsg.buff[0] = len & 0x0F;
+                CanTp_Copy(&g_CanTpTxMsg.buff[1], p_buff, len);
+            }
+            else
+            {
+                g_CanTpTxMsg.len     = CanTp_GetTxMsgDlc(len + 2);
+                g_CanTpTxMsg.buff[0] = 0x00;
+                g_CanTpTxMsg.buff[1] = len;
+                CanTp_Copy(&g_CanTpTxMsg.buff[2], p_buff, len);
+            }
+            break;
+        case CANTP_TX_FF_NPCI:
+            g_CanTpTxMsgCtr.SN = 0x01;
+            if (len != 58)
+            {
+                g_CanTpTxMsg.len     = CanTp_GetTxMsgDlc(len + 2);
+                g_CanTpTxMsg.buff[0] = 0x10 + (uint8_t)((g_CanTpTxData.len >> 8) & 0x0F);
+                g_CanTpTxMsg.buff[1] = (uint8_t)(g_CanTpTxData.len & 0xFF);
+                CanTp_Copy(&g_CanTpTxMsg.buff[2], p_buff, len);
+            }
+            else
+            {
+                g_CanTpTxMsg.len     = CanTp_GetTxMsgDlc(len + 6);
+                g_CanTpTxMsg.buff[0] = 0x10;
+                g_CanTpTxMsg.buff[1] = 0x00;
+                g_CanTpTxMsg.buff[2] = (uint8_t)((g_CanTpTxData.len >> 24) & 0xFF);
+                g_CanTpTxMsg.buff[3] = (uint8_t)((g_CanTpTxData.len >> 16) & 0xFF);
+                g_CanTpTxMsg.buff[4] = (uint8_t)((g_CanTpTxData.len >> 8) & 0xFF);
+                g_CanTpTxMsg.buff[5] = (uint8_t)((g_CanTpTxData.len >> 0) & 0xFF);
+                CanTp_Copy(&g_CanTpTxMsg.buff[6], p_buff, len);
+            }
+            break;
+        case CANTP_TX_CF_NPCI:
+            g_CanTpTxMsg.buff[0] = 0x20 + (g_CanTpTxMsgCtr.SN & 0x0F);
+            if (g_CanTpTxMsgCtr.SN < 0x0F)
+            {
+                g_CanTpTxMsgCtr.SN++;
+            }
+            else
+            {
+                g_CanTpTxMsgCtr.SN = 0x00;
+            }
+            g_CanTpTxMsg.len = CanTp_GetTxMsgDlc(len + 1);
+            CanTp_Copy(&g_CanTpTxMsg.buff[1], p_buff, len);
+            break;
+        default:
+            break;
+    }
+    g_CanTpTxMsgCtr.point += len;
+    (void)CanTp_WriteTxMsg(g_CanTpTxMsg.frame, g_CanTpTxMsg.id, g_CanTpTxMsg.buff, g_CanTpTxMsg.len);
+}
+
+/*******************************************************
+  * Name    :CanTp_RxSingleFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_RxSingleFrame(void)
+{
+    uint16_t len = 0;
+
+    if ((g_CanTpTxState == CANTP_TX_STATE_CF) || (g_CanTpTxState == CANTP_TX_STATE_WAIT))
+    {
+        return;
+    }
+
+    if ((g_CanTpRxState == CANTP_RX_STATE_IDLE)
+        || ((g_CanTpRxState == CANTP_RX_STATE_FF) && (g_CanTpRxMsg.id == CANTP_PHYS_ADDR_ID))
+        || ((g_CanTpRxState == CANTP_RX_STATE_CF) && (g_CanTpRxMsg.id == CANTP_PHYS_ADDR_ID))
+        || ((g_CanTpRxState == CANTP_RX_STATE_WAIT) && (g_CanTpRxMsg.id == CANTP_PHYS_ADDR_ID)))
+    {
+        len = (uint16_t)(g_CanTpRxMsg.buff[0] & 0x0F);
+        if (g_CanTpRxMsg.frame == CAN)
+        {
+            if ((len >= 1) && (len <= 7) && (len <= (g_CanTpRxMsg.len - 1)))
+            {
+                CanTp_StartRxData(CANTP_RX_STATE_SF);
+                g_CanTpRxData.len = (uint32_t)len;
+                CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[1], len);
+                CanTp_EndRxData(CANTP_N_OK);
+            }
+        }
+        else
+        {
+            if ((len >= 1) && (len <= 7) && (g_CanTpRxMsg.len == 8))
+            {
+                CanTp_StartRxData(CANTP_RX_STATE_SF);
+                g_CanTpRxData.len = (uint32_t)len;
+                CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[1], len);
+                CanTp_EndRxData(CANTP_N_OK);
+            }
+            else if (len == 0)
+            {
+                len = (uint16_t)(g_CanTpRxMsg.buff[1]);
+                if ((len >= 1) && (len <= 62) && (len <= (g_CanTpRxMsg.len - 2)))
+                {
+                    CanTp_StartRxData(CANTP_RX_STATE_SF);
+                    g_CanTpRxData.len = (uint32_t)len;
+                    CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[2], len);
+                    CanTp_EndRxData(CANTP_N_OK);
+                }
+            }
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_TxSingleFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_TxSingleFrame(void)
+{
+    CanTp_StartTxData(CANTP_TX_STATE_SF);
+    CanTp_PushTxData(g_CanTpTxData.frame, g_CanTpTxData.id, g_CanTpTxData.buff, g_CanTpTxData.len);
+    CanTp_EndTxData(CANTP_N_OK);
+}
+
+/*******************************************************
+  * Name    :CanTp_RxFirstFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_RxFirstFrame(void)
+{
+    uint32_t len = 0;
+
+    if ((g_CanTpRxMsg.id == CANTP_PHYS_ADDR_ID)
+        && ((g_CanTpTxState != CANTP_TX_STATE_CF) && (g_CanTpTxState != CANTP_TX_STATE_WAIT)))
+    {
+        len   = (uint32_t)(g_CanTpRxMsg.buff[0] & 0x0F);
+        len <<= 8;
+        len  |= (uint32_t)g_CanTpRxMsg.buff[1];
+        if ((g_CanTpRxMsg.frame == CAN) && (len > 7) && (g_CanTpRxMsg.len >= 8))
+        {
+            if (len > CANTP_RX_BUFF_NB)
+            {
+                g_CanTpTxMsgCtr.FS = CANTP_FS_OVF;
+                g_CanTpTxType      = CANTP_TX_FC_NPCI;
+            }
+            else
+            {
+                CanTp_StartRxData(CANTP_RX_STATE_FF);
+                g_CanTpRxData.len  = len;
+                g_CanTpRxMsgCtr.SN = 0x01;
+                g_CanTpTxMsgCtr.FS = CANTP_FS_CTS;
+                g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                g_CanTpRxState     = CANTP_RX_STATE_WAIT;
+                CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[2], 6);
+            }
+        }
+        else if ((g_CanTpRxMsg.frame == CANFD) && (g_CanTpRxMsg.len == 64))
+        {
+            if ((len > 62) && (len <= 4095))
+            {
+                if (len > CANTP_RX_BUFF_NB)
+                {
+                    g_CanTpTxMsgCtr.FS = CANTP_FS_OVF;
+                    g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                }
+                else
+                {
+                    CanTp_StartRxData(CANTP_RX_STATE_FF);
+                    g_CanTpRxData.len  = len;
+                    g_CanTpRxMsgCtr.SN = 0x01;
+                    g_CanTpTxMsgCtr.FS = CANTP_FS_CTS;
+                    g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                    g_CanTpRxState     = CANTP_RX_STATE_WAIT;
+                    CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[2], 62);
+                }
+            }
+            else if (len == 0)
+            {
+                len   = (uint32_t)(g_CanTpRxMsg.buff[2]);
+                len <<= 8;
+                len  |= (uint32_t)g_CanTpRxMsg.buff[3];
+                len <<= 8;
+                len  |= (uint32_t)g_CanTpRxMsg.buff[4];
+                len <<= 8;
+                len  |= (uint32_t)g_CanTpRxMsg.buff[5];
+                if (len > 4095)
+                {
+                    if (len > CANTP_RX_BUFF_NB)
+                    {
+                        g_CanTpTxMsgCtr.FS = CANTP_FS_OVF;
+                        g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                    }
+                    else
+                    {
+                        CanTp_StartRxData(CANTP_RX_STATE_FF);
+                        g_CanTpRxData.len  = len;
+                        g_CanTpRxMsgCtr.SN = 0x01;
+                        g_CanTpTxMsgCtr.FS = CANTP_FS_CTS;
+                        g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                        g_CanTpRxState     = CANTP_RX_STATE_WAIT;
+                        CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[6], 58);
+                    }
+                }
+                else
+                {
+                    CanTp_EndRxData(CANTP_N_UNEXP_PDU);
+                }
+            }
+            else
+            {
+                CanTp_EndRxData(CANTP_N_UNEXP_PDU);
+            }
+        }
+        else
+        {
+            CanTp_EndRxData(CANTP_N_UNEXP_PDU);
+        }
+    }
+    else
+    {
+        CanTp_EndRxData(CANTP_N_UNEXP_PDU);
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_TxFirstFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_TxFirstFrame(void)
+{
+    CanTp_StartTxData(CANTP_TX_STATE_FF);
+    if (g_CanTpTxData.frame == CAN)
+    {
+        CanTp_PushTxData(g_CanTpTxData.frame, g_CanTpTxData.id, g_CanTpTxData.buff, 6);
+    }
+    else
+    {
+        if (g_CanTpTxData.len <= 4095)
+        {
+            CanTp_PushTxData(g_CanTpTxData.frame, g_CanTpTxData.id, g_CanTpTxData.buff, 62);
+        }
+        else
+        {
+            CanTp_PushTxData(g_CanTpTxData.frame, g_CanTpTxData.id, g_CanTpTxData.buff, 58);
+        }
+    }
+    g_CanTpTimeCtr.bits.N_Bs = TRUE;
+    g_CanTpTimeTick.N_Bs     = 0;
+    g_CanTpTxState           = CANTP_TX_STATE_WAIT;
+}
+
+/*******************************************************
+  * Name    :CanTp_RxContinueFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_RxContinueFrame(void)
+{
+    uint16_t len = 0;
+
+    if (g_CanTpRxState == CANTP_RX_STATE_CF)
+    {
+        if ((g_CanTpRxData.frame == g_CanTpRxMsg.frame) && (g_CanTpRxData.id == g_CanTpRxMsg.id))
+        {
+            if (g_CanTpRxMsg.buff[0] == (g_CanTpRxMsgCtr.SN + 0x20))
+            {
+                if (g_CanTpRxMsgCtr.SN < 0x0F)
+                {
+                    g_CanTpRxMsgCtr.SN++;
+                }
+                else
+                {
+                    g_CanTpRxMsgCtr.SN = 0x00;
+                }
+                if (g_CanTpRxMsg.frame == CAN)
+                {
+                    if (g_CanTpRxMsgCtr.point + 7 >= g_CanTpRxData.len)
+                    {
+                        len = g_CanTpRxData.len - g_CanTpRxMsgCtr.point;
+                        if (len <= (g_CanTpRxMsg.len - 1))
+                        {
+                            CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[1], len);
+                            CanTp_EndRxData(CANTP_N_OK);
+                        }
+                    }
+                    else
+                    {
+                        if (g_CanTpRxMsg.len >= 8)
+                        {
+                            g_CanTpTimeTick.N_Cr = 0;
+                            g_CanTpRxMsgCtr.BS++;
+                            if ((g_CanTpRxMsgCtr.BS >= g_CanTpRxMsgCtr.BSmax) && (g_CanTpRxMsgCtr.BSmax != 0x00))
+                            {
+                                g_CanTpTxMsgCtr.FS = CANTP_FS_CTS;
+                                g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                                g_CanTpRxState     = CANTP_RX_STATE_WAIT;
+                            }
+                            CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[1], 7);
+                        }
+                    }
+                }
+                else
+                {
+                    if (g_CanTpRxMsgCtr.point + 63 >= g_CanTpRxData.len)
+                    {
+                        len = g_CanTpRxData.len - g_CanTpRxMsgCtr.point;
+                        if (len <= (g_CanTpRxMsg.len - 1))
+                        {
+                            CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[1], len);
+                            CanTp_EndRxData(CANTP_N_OK);
+                        }
+                    }
+                    else
+                    {
+                        if (g_CanTpRxMsg.len == 64)
+                        {
+                            g_CanTpTimeTick.N_Cr = 0;
+                            g_CanTpRxMsgCtr.BS++;
+                            if ((g_CanTpRxMsgCtr.BS >= g_CanTpRxMsgCtr.BSmax) && (g_CanTpRxMsgCtr.BSmax != 0x00))
+                            {
+                                g_CanTpTxMsgCtr.FS = CANTP_FS_CTS;
+                                g_CanTpTxType      = CANTP_TX_FC_NPCI;
+                                g_CanTpRxState     = CANTP_RX_STATE_WAIT;
+                            }
+                            CanTp_PushRxData(g_CanTpRxMsg.frame, g_CanTpRxMsg.id, &g_CanTpRxMsg.buff[1], 63);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                CanTp_EndRxData(CANTP_N_WRONG_SN);
+            }
+        }
+        else
+        {
+            CanTp_EndRxData(CANTP_N_UNEXP_PDU);
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_TxContinueFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_TxContinueFrame(void)
+{
+    uint16_t len    = 0;
+    uint8_t  offset = 0;
+
+    if ((g_CanTpTxState == CANTP_TX_STATE_CF) && (g_CanTpTimeTick.S_Tmin > g_CanTpTxMsgCtr.STmin))
+    {
+        offset = g_CanTpTxData.frame == CAN ? 7 : 63;
+        if (g_CanTpTxMsgCtr.point + offset >= g_CanTpTxData.len)
+        {
+            len = g_CanTpTxData.len - g_CanTpTxMsgCtr.point;
+            CanTp_PushTxData(g_CanTpTxData.frame, g_CanTpTxData.id, &g_CanTpTxData.buff[g_CanTpTxMsgCtr.point], len);
+            CanTp_EndTxData(CANTP_N_OK);
+        }
+        else
+        {
+            g_CanTpTxMsgCtr.BS++;
+            g_CanTpTimeTick.S_Tmin = 0;
+            if ((g_CanTpTxMsgCtr.BSmax != 0) && (g_CanTpTxMsgCtr.BS >= g_CanTpTxMsgCtr.BSmax))
+            {
+                g_CanTpTimeCtr.bits.N_Bs   = TRUE;
+                g_CanTpTimeTick.N_Bs       = 0;
+                g_CanTpTimeCtr.bits.S_Tmin = FALSE;
+                g_CanTpTxState             = CANTP_TX_STATE_WAIT;
+            }
+            len = g_CanTpTxData.frame == CAN ? 7 : 63;
+            CanTp_PushTxData(g_CanTpTxData.frame, g_CanTpTxData.id, &g_CanTpTxData.buff[g_CanTpTxMsgCtr.point], len);
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_RxFlowControlFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_RxFlowControlFrame(void)
+{
+    if ((g_CanTpRxMsg.id == CANTP_PHYS_ADDR_ID)
+        && (g_CanTpTxData.frame == g_CanTpRxMsg.frame)
+        && (g_CanTpRxMsg.len >= 3)
+        && ((g_CanTpTxState == CANTP_TX_STATE_WAIT) || (g_CanTpTxState == CANTP_TX_STATE_CF)))
+    {
+        g_CanTpRxMsgCtr.FS = (CanTp_Fs_Type)(g_CanTpRxMsg.buff[0] & 0x0F);
+        switch (g_CanTpRxMsgCtr.FS)
+        {
+            case CANTP_FS_CTS:
+                g_CanTpTimeCtr.bits.N_Bs   = FALSE;
+                g_CanTpTimeTick.N_Bs       = 0;
+                g_CanTpTimeCtr.bits.S_Tmin = TRUE;
+                g_CanTpTimeTick.S_Tmin     = 0;
+                g_CanTpTxMsgCtr.BS         = 0;
+                g_CanTpTxMsgCtr.BSmax      = g_CanTpRxMsg.buff[1];
+                g_CanTpTxMsgCtr.STmin      = g_CanTpRxMsg.buff[2] + 3;
+                g_CanTpTxState             = CANTP_TX_STATE_CF;
+                break;
+            case CANTP_FS_WAIT:
+                g_CanTpTimeTick.N_Bs = 0;
+                g_CanTpTxState       = CANTP_TX_STATE_WAIT;
+                break;
+            case CANTP_FS_OVF:
+                if (g_CanTpTxMsgCtr.STmin == 0)
+                {
+                    CanTp_EndTxData(CANTP_N_BUFF_OVFLW);
+                }
+                break;
+            default:
+                if (g_CanTpTxMsgCtr.STmin == 0)
+                {
+                    CanTp_EndTxData(CANTP_N_INVALID_FS);
+                }
+                break;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_TxFlowControlFrame
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_TxFlowControlFrame(void)
+{
+    if (g_CanTpTxMsgCtr.FS != CANTP_FS_NULL)
+    {
+        g_CanTpRxMsgCtr.BSmax = CANTP_BS_MAX;
+        g_CanTpRxMsgCtr.STmin = CANTP_N_S_TMIN_TIME;
+        CanTp_Fill(g_CanTpTxMsg.buff, CANTP_BYTE_FILL_VALUE, 64);
+        g_CanTpTxMsg.frame   = g_CanTpRxData.frame;
+        g_CanTpTxMsg.id      = CANTP_RESP_ADDR_ID;
+        g_CanTpTxMsg.len     = 8;
+        g_CanTpTxMsg.buff[0] = (uint8_t)(0x30 + g_CanTpTxMsgCtr.FS);
+        g_CanTpTxMsg.buff[1] = g_CanTpRxMsgCtr.BSmax;
+        g_CanTpTxMsg.buff[2] = g_CanTpRxMsgCtr.STmin;
+        (void)CanTp_WriteTxMsg(g_CanTpTxMsg.frame, g_CanTpTxMsg.id, g_CanTpTxMsg.buff, g_CanTpTxMsg.len);
+        g_CanTpTimeCtr.bits.N_Cr = TRUE;
+        g_CanTpTimeTick.N_Cr     = 0;
+        g_CanTpRxMsgCtr.BS       = 0;
+        g_CanTpTxMsgCtr.FS       = CANTP_FS_NULL;
+        g_CanTpTxType            = CANTP_TX_NULL_NPCI;
+        g_CanTpRxState           = CANTP_RX_STATE_CF;
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_RxMsgHandler
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_RxMsgHandler(void)
+{
+    CanTp_RxMsgDisposal();
+    switch (g_CanTpRxType)
+    {
+        case CANTP_RX_SF_NPCI:
+            CanTp_RxSingleFrame();
+            break;
+        case CANTP_RX_FF_NPCI:
+            CanTp_RxFirstFrame();
+            break;
+        case CANTP_RX_CF_NPCI:
+            CanTp_RxContinueFrame();
+            break;
+        case CANTP_RX_FC_NPCI:
+            CanTp_RxFlowControlFrame();
+            break;
+        default:
+            break;
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_TxMsgHandler
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void CanTp_TxMsgHandler(void)
+{
+    CanTp_TxMsgDisposal();
+    switch (g_CanTpTxType)
+    {
+        case CANTP_TX_SF_NPCI:
+            CanTp_TxSingleFrame();
+            break;
+        case CANTP_TX_FF_NPCI:
+            CanTp_TxFirstFrame();
+            break;
+        case CANTP_TX_CF_NPCI:
+            CanTp_TxContinueFrame();
+            break;
+        case CANTP_TX_FC_NPCI:
+            CanTp_TxFlowControlFrame();
+            break;
+        default:
+            break;
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_Main
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void CanTp_Main(void)
+{
+    switch (g_CanTpState)
+    {
+        case CANTP_STATE_INIT:
+            CanTp_VariableInit();
+            g_CanTpState = CANTP_STATE_NORMAL;
+            break;
+        case CANTP_STATE_NORMAL:
+            CanTp_RxMsgHandler();
+            CanTp_TxMsgHandler();
+            break;
+        default:
+            break;
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_UdsRxMsg
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Bool CanTp_UdsRxMsg(Frame_Type *p_frame, uint32_t *p_id, uint8_t *p_buff, uint16_t *p_len)
+{
+    if (g_CanTpRxState == CANTP_RX_STATE_OK)
+    {
+        *p_frame = g_CanTpRxData.frame;
+        *p_id    = g_CanTpRxData.id;
+        *p_len   = g_CanTpRxData.len;
+        CanTp_Copy(p_buff, g_CanTpRxData.buff, g_CanTpRxData.len);
+        g_CanTpRxState = CANTP_RX_STATE_IDLE;
+        return TRUE;
+    }
+    else
+    {
+        return FALSE;
+    }
+}
+
+/*******************************************************
+  * Name    :CanTp_UdsTxMsg
+  * Author  :WangHu
+  * Function:***
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Bool CanTp_UdsTxMsg(Frame_Type frame, uint32_t id, uint8_t *p_buff, uint16_t len)
+{
+    if ((g_CanTpTxState == CANTP_TX_STATE_IDLE) && (len >= 1) && (len <= CANTP_TX_BUFF_NB))
+    {
+        g_CanTpTxData.frame = frame;
+        g_CanTpTxData.id    = id;
+        g_CanTpTxData.len   = len;
+        CanTp_Copy(g_CanTpTxData.buff, p_buff, len);
+        g_CanTpTxState = CANTP_TX_STATE_START;
+        return TRUE;
+    }
+    else
+    {
+        return FALSE;
+    }
+}
+

@@ -1,0 +1,5 @@
+/*******************************************************
+  * Name    :Service_Cfg.c
+  * Function:Service config (BLE project - empty)
+ *******************************************************/
+#include "Service_Cfg.h"

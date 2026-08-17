@@ -1,0 +1,12 @@
+/*******************************************************
+  * Name    :Dtc_Cfg.c
+  * Function:DTC config (BLE project - 1 DTC: CAN Bus Off)
+  *******************************************************/
+/*-------------include file---------------------------*/
+#include "Dtc_Cfg.h"
+// clang-format off
+/*-------------DTC config table-----------------------*/
+const Dtc_Cfg_Type g_DtcCfgList[DTC_CFG_LIST_NUM] = {
+    /* 0x9E8080: CAN Bus Off, status mask 0x59 */
+    {0x9E8080, UDS_SESSION_DEFAULT | UDS_SESSION_EXTEND},
+};

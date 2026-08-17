@@ -1,0 +1,36 @@
+/*******************************************************
+  * Name    :SecuAccs_Cfg.c
+  * Function:Security Access config (BLE: seed+1 algorithm)
+  *******************************************************/
+/*-------------include file---------------------------*/
+#include "SecuAccs_Cfg.h"
+/*-------------variable statement---------------------*/
+uint16_t g_SecuAccsRand = 0;
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :SecuAccs_Lev1GetSeedKey
+  * Simple algorithm: key[i] = seed[i] + 1
+  *******************************************************/
+static void SecuAccs_Lev1GetSeedKey(uint8_t *seed, uint8_t *key)
+{
+    uint8_t i = 0;
+
+    /* Simple pseudo-random seed from counter */
+    for (i = 0; i < 4; i++)
+    {
+        seed[i] = (uint8_t)((g_SecuAccsRand >> (i * 4)) & 0xFF);
+    }
+
+    /* key[i] = seed[i] + 1 (simple) */
+    for (i = 0; i < 4; i++)
+    {
+        key[i] = seed[i] + 1;
+    }
+}
+
+// clang-format off
+/*-------------Security config table------------------*/
+const SecuAccs_Cfg_Type g_SecuAccsCfgList[SECUACCS_CFG_LIST_NUM] = {
+    /* Level 1: seed 4 bytes, key 4 bytes, 3 attempts, 10s lockout */
+    {UDS_DCM_SEC_LEV_1, 0x01, 4, 4, 10000, 3, FALSE, SecuAccs_Lev1GetSeedKey},
+};

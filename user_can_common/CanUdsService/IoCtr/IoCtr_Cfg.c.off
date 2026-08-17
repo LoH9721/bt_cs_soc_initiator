@@ -1,0 +1,5 @@
+/*******************************************************
+  * Name    :IoCtr_Cfg.c
+  * Function:IO Control config (BLE project - empty)
+  *******************************************************/
+#include "IoCtr_Cfg.h"

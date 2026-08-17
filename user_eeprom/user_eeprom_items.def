@@ -1,0 +1,111 @@
+/***************************************************************************//**
+ * @file user_eeprom_items.def
+ * @brief 所有 EEPROM 存储条目的唯一定义点 (X-Macro 模式)
+ *
+ * 格式: EEPROM_ITEM_X(枚举后缀, NVM地址, 数据长度, 显示名, 标志位)
+ *
+ * 地址排布规则 (重要!):
+ *   NVM3 模式下, 地址为逻辑 Object Key, 只需唯一不重复即可。
+ *   I2C EEPROM 模式下, 地址 = 物理字节偏移量, 必须满足:
+ *     本条目的 (地址 + data_len + 2) ≤ 下一条目的地址
+ *     (每条存储格式为 data(N) + CRC16(2), 共 data_len+2 字节)
+ *
+ *   → 地址已按此规则排布, 确保 NVM3 和 I2C 两种模式均可直接使用。
+ *
+ * 新增条目: 只需在此文件中加一行。
+ * 删除条目: 删掉该行即可 (引用处编译报错提醒清理)。
+ *
+ * 标志位:
+ *   EEPROM_FLAG_NONE       0x00  普通条目, 工厂复位时清除
+ *   EEPROM_FLAG_PRESERVE   0x01  工厂复位时保留 (产线数据)
+ *   EEPROM_FLAG_AUTO_CLEAR  0x02  上电/复位时自动擦除 (备用区)
+ *
+ * NVM Key 范围总览:
+ *   0x4000-0x40FF  钥匙协议 (2 个条目, 占用 ~72B)
+ *   0x5000-0x50FF  手机协议主区 (10 个条目, 占用 ~450B)
+ *   0x5200-0x52FF  手机协议备用区 (3 个条目, 占用 ~90B)
+ *   0x5300-0x53FF  手机 RSSI 距离估算校准 (2 个条目, 占用 ~7B)
+ *   0x6000-0x6FFF  预留
+ ******************************************************************************/
+
+#ifndef EEPROM_ITEM_X
+#error "EEPROM_ITEM_X must be defined before including this file"
+#endif
+
+// ===== 地址计算辅助 (仅注释, 不参与编译) =====
+// total_len = data_len + 2 (CRC16)
+//
+// 钥匙侧:
+//   0x4000  KEY_PEER_PUBKEY     64+2=66B  →  [0x4000, 0x4042)
+//   0x4050  KEY_PAIRING_STATE   1+2=3B    →  [0x4050, 0x4053)  gap=14B
+//
+// 手机产线:
+//   0x5000  (deviceId 已改为上电时从芯片UID派生, 不占EEPROM, 空闲14B)
+//   0x5030  QID                 32+2=34B  →  [0x5030, 0x5052)
+//   0x5060  CV                  4+2=6B    →  [0x5060, 0x5066)  gap=14B
+//   0x5070  BIND_SECRET         16+2=18B  →  [0x5070, 0x5082)  gap=10B
+//
+// 手机绑定:
+//   0x5100  APP_PUBKEY          65+2=67B  →  [0x5100, 0x5143)
+//   0x5150  APP_KEY_ID          16+2=18B  →  [0x5150, 0x5162)  gap=13B
+//   0x5170  BIND_VERSION        4+2=6B    →  [0x5170, 0x5176)  gap=14B
+//   0x5180  APP_COUNTER         8+2=10B   →  [0x5180, 0x518A)  gap=10B
+//   0x5190  BIND_STATE          1+2=3B    →  [0x5190, 0x5193)  gap=6B
+//   0x51A0  FACTORY_PUBKEY      65+2=67B  →  [0x51A0, 0x51E3)  gap=13B
+//
+// 换绑备用区:
+//   0x5200  BAK_PUBKEY          65+2=67B  →  [0x5200, 0x5243)
+//   0x5250  BAK_KEY_ID          16+2=18B  →  [0x5250, 0x5262)  gap=13B
+//   0x5270  BAK_BIND_VERSION    4+2=6B    →  [0x5270, 0x5276)  gap=14B
+
+// ---- 钥匙侧 (0x4000 范围) ----
+EEPROM_ITEM_X(KEY_PEER_PUBKEY,       0x4000,  64,  "key_peer_pubkey",       EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(KEY_PAIRING_STATE,     0x4050,   1,  "key_pairing_state",     EEPROM_FLAG_NONE)
+
+// ---- 手机协议: 产线数据 (0x5000 范围, 工厂复位保留) ----
+// deviceId 由上电时芯片UID派生, 不占用EEPROM
+// VIN 17B + CRC16(2B) = 19B → [0x5000, 0x5013)
+EEPROM_ITEM_X(PHONE_VIN,             0x5000,  17,  "phone_vin",             EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_QID,             0x5030,  32,  "phone_qid",             EEPROM_FLAG_PRESERVE)
+EEPROM_ITEM_X(PHONE_CV,              0x5060,   4,  "phone_cv",              EEPROM_FLAG_PRESERVE)
+EEPROM_ITEM_X(PHONE_BIND_SECRET,     0x5070,  16,  "phone_bind_secret",     EEPROM_FLAG_PRESERVE)
+
+// ---- 手机协议: 绑定记录 (0x5100 范围, 工厂复位清除) ----
+EEPROM_ITEM_X(PHONE_APP_PUBKEY,      0x5100,  65,  "phone_app_pubkey",      EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_APP_KEY_ID,      0x5150,  16,  "phone_app_key_id",      EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_BIND_VERSION,    0x5170,   4,  "phone_bind_version",    EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_APP_COUNTER,     0x5180,   8,  "phone_app_counter",     EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_BIND_STATE,      0x5190,   1,  "phone_bind_state",      EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_PASSIVE_ENABLED,      0x51F0,   1,  "phone_passive_enabled",  EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_PASSIVE_SENSITIVITY,  0x51F4,   1,  "phone_passive_sens",     EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_PASSIVE_QUOTA,        0x51F8,   4,  "phone_passive_quota",    EEPROM_FLAG_NONE)
+EEPROM_ITEM_X(PHONE_FACTORY_PUBKEY,  0x51A0,  65,  "phone_factory_pubkey",  EEPROM_FLAG_PRESERVE)
+
+// ---- 换绑备用区 (0x5200 范围, 上电自动擦除) ----
+EEPROM_ITEM_X(PHONE_BAK_PUBKEY,      0x5200,  65,  "phone_bak_pubkey",      EEPROM_FLAG_AUTO_CLEAR)
+EEPROM_ITEM_X(PHONE_BAK_KEY_ID,      0x5250,  16,  "phone_bak_key_id",      EEPROM_FLAG_AUTO_CLEAR)
+EEPROM_ITEM_X(PHONE_BAK_BIND_VERSION,0x5270,   4,  "phone_bak_bind_version",EEPROM_FLAG_AUTO_CLEAR)
+EEPROM_ITEM_X(PHONE_BAK_VIN,         0x5280,  17,  "phone_bak_vin",         EEPROM_FLAG_AUTO_CLEAR)
+
+// ---- 手机 RSSI 距离估算校准 (0x5300 范围, 工厂复位保留) ----
+// 0x5300  PHONE_RANG_CAL_RSSI_1M    1+2=3B   [0x5300, 0x5303)  rssi_1m (int8_t)
+// 0x5310  PHONE_RANG_CAL_RSSI_10M   1+2=3B   [0x5310, 0x5313)  rssi_10m (int8_t), n 内部反算
+EEPROM_ITEM_X(PHONE_RANG_CAL_RSSI_1M,   0x5300,  1,  "phone_rang_cal_rssi_1m",  EEPROM_FLAG_PRESERVE)
+EEPROM_ITEM_X(PHONE_RANG_CAL_RSSI_10M,  0x5310,  1,  "phone_rang_cal_rssi_10m", EEPROM_FLAG_PRESERVE)
+
+// ---- 手机 PEPS 位置区迟滞阈值 (0x5400 范围, 工厂复位保留, 供实际标定) ----
+// 每条: data(4B) + CRC16(2B) = 6B, 3条共18B
+// 0x5400  PHONE_PEPS_ZONE_IN_TH       4+2=6B  {in_enter_cm(uint16), in_exit_cm(uint16)}
+// 0x5410  PHONE_PEPS_ZONE_UNLOCK_TH   4+2=6B  {unlock_enter_cm(uint16), unlock_exit_cm(uint16)}
+// 0x5420  PHONE_PEPS_ZONE_INVALID_TH  4+2=6B  {invalid_enter_cm(uint16), invalid_exit_cm(uint16)}
+// 0x5430  PHONE_PEPS_SENS_ENTER_TH    6+2=8B  {near,std,far}_enter_cm(uint16 小端)
+EEPROM_ITEM_X(PHONE_PEPS_ZONE_IN_TH,       0x5400,  4,  "pzone_in_th",       EEPROM_FLAG_PRESERVE)
+EEPROM_ITEM_X(PHONE_PEPS_ZONE_UNLOCK_TH,   0x5410,  4,  "pzone_unlock_th",   EEPROM_FLAG_PRESERVE)
+EEPROM_ITEM_X(PHONE_PEPS_ZONE_INVALID_TH,  0x5420,  4,  "pzone_invalid_th",  EEPROM_FLAG_PRESERVE)
+EEPROM_ITEM_X(PHONE_PEPS_SENS_ENTER_TH,    0x5430,  6,  "psens_enter_th",    EEPROM_FLAG_PRESERVE)
+
+// ---- HID 调试配置 (0x5500 范围, 串口 hid_pin 写入, 断电保持) ----
+// 0x5510  HID_CFG_PIN    4+2=6B    [0x5510, 0x5516)  uint32 配对PIN, 0=无(随机)
+EEPROM_ITEM_X(HID_CFG_PIN,            0x5510,   4,  "hid_cfg_pin",         EEPROM_FLAG_NONE)
+
+#undef EEPROM_ITEM_X

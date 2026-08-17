@@ -1,0 +1,366 @@
+/*******************************************************
+  * Name    :Service.c
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+/*-------------include file---------------------------*/
+#include "Service_Cfg.h"
+/*-------------variable statement---------------------*/
+
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :Service_0x10DiagnosticSessionControl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x10DiagnosticSessionControl(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t         writeData[UDS_BOOT_LEN] = UDS_BOOT_VALID_VALUE;
+    static uint32_t waitTime                = 0;
+
+    if (opStatus == UDS_DCM_INITIAL)
+    {
+        if (p_msgContext->rxLen != 1)
+        {
+            *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+            return RET_NOT_OK;
+        }
+
+        if (p_msgContext->subFun != 0x02)
+        {
+            Service_DslSetSessionMode((Uds_DcmSessMode_Type)p_msgContext->subFun);
+            p_msgContext->p_txData[0] = p_msgContext->subFun;
+            p_msgContext->p_txData[1] = (uint8_t)(g_UdsGenCfg.p2ServerMax >> 8);
+            p_msgContext->p_txData[2] = (uint8_t)(g_UdsGenCfg.p2ServerMax >> 0);
+            p_msgContext->p_txData[3] = (uint8_t)((g_UdsGenCfg.p2StartServerMax / 10) >> 8);
+            p_msgContext->p_txData[4] = (uint8_t)((g_UdsGenCfg.p2StartServerMax / 10) >> 0);
+            p_msgContext->txLen       = 5;
+            return RET_OK;
+        }
+        else if (p_msgContext->subFun == 0x02)
+        {
+            if (RteSys_GetU32Sig(RTESYS_U32_VEHICLE_SPEED) > 3)
+            {
+                *p_errCode = UDS_DCM_E_NRC_CNC;
+                return RET_NOT_OK;
+            }
+        }
+    }
+
+    if (waitTime == 0)
+    {
+        if (opStatus == UDS_DCM_FORCE_RCRRP_OK)
+        {
+            writeData[4] = (uint8_t)p_msgContext->reqType;
+            writeData[5] = UDS_DCM_SID_0X10;
+            writeData[6] = p_msgContext->subFun;
+            writeData[7] = p_msgContext->supPosResp;
+            writeData[8] = p_msgContext->frame;
+            (void)Service_NvmWrite(UDS_BOOT_VALID_ADDR, writeData, UDS_BOOT_LEN);
+            waitTime = Service_GetSysTimeMs();
+        }
+    }
+    else
+    {
+        if ((Service_GetSysTimeMs() - waitTime) > 200)
+        {
+            Service_SoftReset();
+            waitTime   = 0;
+            *p_errCode = UDS_DCM_E_NRC_CNC;
+            return RET_NOT_OK;
+        }
+    }
+    return RET_RCRRP;
+}
+
+/*******************************************************
+  * Name    :Service_0x11EcuReset
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x11EcuReset(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t         writeData[UDS_BOOT_LEN] = UDS_BOOT_VALID_VALUE;
+    static uint32_t waitTime                = 0;
+
+    if (opStatus == UDS_DCM_INITIAL)
+    {
+        if (p_msgContext->rxLen != 1)
+        {
+            *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+            return RET_NOT_OK;
+        }
+        *p_errCode = UDS_DCM_E_NRC_RCRRP;
+        return RET_RCRRP;
+    }
+
+    if (waitTime == 0)
+    {
+        if (opStatus == UDS_DCM_FORCE_RCRRP_OK)
+        {
+            writeData[4] = (uint8_t)p_msgContext->reqType;
+            writeData[5] = UDS_DCM_SID_0X11;
+            writeData[6] = p_msgContext->subFun;
+            writeData[7] = p_msgContext->supPosResp;
+            writeData[8] = p_msgContext->frame;
+            (void)Service_NvmWrite(UDS_BOOT_VALID_ADDR, writeData, UDS_BOOT_LEN);
+            waitTime = Service_GetSysTimeMs();
+        }
+    }
+    else
+    {
+        if ((Service_GetSysTimeMs() - waitTime) > 400)
+        {
+            Service_SoftReset();
+            waitTime   = 0;
+            *p_errCode = UDS_DCM_E_NRC_CNC;
+            return RET_NOT_OK;
+        }
+    }
+    return RET_RCRRP;
+}
+
+/*******************************************************
+  * Name    :Service_0x14ClearDiagnosticInformation
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x14ClearDiagnosticInformation(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x14HandleClearDiagnosticInformation(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x19ReadDtcInformation
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x19ReadDtcInformation(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x19HandleReadDtcInformation(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x22ReadDataByIdentifier
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x22ReadDataByIdentifier(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x22HandleReadDataByIdentifier(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x23ReadMemoryByAddress
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x23ReadMemoryByAddress(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t  i          = 0;
+    uint32_t memAddr    = 0;
+    uint32_t memSzie    = 0;
+    uint8_t  memAddrLen = 0;
+    uint8_t  memSizeLen = 0;
+
+    if (opStatus != UDS_DCM_INITIAL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->rxLen < 3)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->p_rxData[0] != 0x44)
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+
+    memAddrLen = (uint8_t)((p_msgContext->p_rxData[1] & 0x0F) >> 0);
+    memSizeLen = (uint8_t)((p_msgContext->p_rxData[1] & 0xF0) >> 4);
+    if (p_msgContext->rxLen != (memAddrLen + memSizeLen + 1))
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    for (i = 0; i < memAddrLen; i++)
+    {
+        memAddr <<= 8;
+        memAddr  |= p_msgContext->p_rxData[i + 1];
+    }
+    for (i = 0; i < memSizeLen; i++)
+    {
+        memSzie <<= 8;
+        memSzie  |= p_msgContext->p_rxData[i + memAddrLen + 1];
+    }
+    if (memSzie > 0xFFFF)
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+
+    if (Service_NvmRead(memAddr, p_msgContext->p_txData, memSzie))
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+    p_msgContext->txLen = (uint16_t)memSzie;
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Service_0x27SecurityAccess
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x27SecurityAccess(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x27HandleSecurityAccess(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x28CommunicationControl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x28CommunicationControl(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    Uds_CtrlType_Type ctrlType = UDS_CTR_ENABLE_RX_AND_TX;
+    Uds_ComType_Type  comType  = UDS_COM_NULL_MSG;
+
+    if (opStatus != UDS_DCM_INITIAL || RteSys_GetU32Sig(RTESYS_U32_VEHICLE_SPEED) > 3)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->rxLen != 2)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    ctrlType = (Uds_CtrlType_Type)p_msgContext->subFun;
+    comType  = (Uds_ComType_Type)p_msgContext->p_rxData[1];
+    if ((comType != UDS_COM_NORMAL_MSG)
+        && (comType != UDS_COM_NM_MSG)
+        && (comType != UDS_COM_NORMAL_MSG_AND_NM_MSG))
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+    p_msgContext->txLen       = 1;
+    p_msgContext->p_txData[0] = ctrlType;
+
+    Service_SwtichCtlByUds(ctrlType, comType);
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Service_0x2EWriteDataByIdentifier
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x2EWriteDataByIdentifier(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x2EHandleWriteDataByIdentifier(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x2FInputOutputControlByIdentifier
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x2FInputOutputControlByIdentifier(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x2FHandleInputOutputControlByIdentifier(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x31RoutineControl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x31RoutineControl(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x31HandleRoutineControl(opStatus, p_msgContext, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Service_0x3ETesterPresent
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x3ETesterPresent(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    if (opStatus != UDS_DCM_INITIAL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->rxLen != 1)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->subFun != 0x00)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SFNS;
+        return RET_NOT_OK;
+    }
+
+    if (Service_GetCurrentSessionMode() != UDS_DCM_DEFAULT_SESSION)
+    {
+        Service_ResetS3ServerTime();
+    }
+    p_msgContext->p_txData[0] = p_msgContext->subFun;
+    p_msgContext->txLen       = 1;
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Service_0x85ControlDtcSetting
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Service_0x85ControlDtcSetting(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    return Service_0x85HandleControlDtcSetting(opStatus, p_msgContext, p_errCode);
+}
+

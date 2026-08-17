@@ -1,0 +1,525 @@
+/*******************************************************
+  * Name    :SecuAccs.c
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+/*-------------include file---------------------------*/
+#include "SecuAccs_Cfg.h"
+/*-------------variable statement---------------------*/
+static SecuAccs_Info_Type   g_SecuAccsInfo;
+static SecuAccs_Status_Type g_SecuAccsStatus[SECUACCS_CFG_LIST_NUM];
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :SecuAccs_Init
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void SecuAccs_Init(void)
+{
+    uint8_t i                           = 0;
+    Bool    ret                         = FALSE;
+    uint8_t atmptCnt[UDS_SECUACCS1_LEN] = { 0x00 };
+
+    g_SecuAccsInfo.p_curCfg             = NULL;
+    g_SecuAccsInfo.p_curStatus          = NULL;
+    g_SecuAccsInfo.preSecAccsType       = 0x00;
+    g_SecuAccsInfo.msgType              = SECUACCS_MSG_REQ_SEED;
+    g_SecuAccsInfo.state                = SECUACCS_STATE_ALL_SECULVL_LOCK;
+    ret                                 = SecuAccs_NvmRead(UDS_SECUACCS1_ADDR, atmptCnt, UDS_SECUACCS1_LEN);
+    for (i = 0; i < SECUACCS_CFG_LIST_NUM; i++)
+    {
+        g_SecuAccsStatus[i].seedActive = FALSE;
+        if ((ret == TRUE) && (atmptCnt[i] <= g_SecuAccsCfgList[i].atmptCntMax))
+        {
+            g_SecuAccsStatus[i].atmptCnt      = atmptCnt[i];
+            g_SecuAccsStatus[i].secuDelayTick = (atmptCnt[i] == 0) ? 0 : g_SecuAccsCfgList[i].secuDelayMax;
+        }
+        else
+        {
+            g_SecuAccsStatus[i].atmptCnt      = 0;
+            g_SecuAccsStatus[i].secuDelayTick = 0;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_StorageDataToNvm
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void SecuAccs_StorageDataToNvm(void)
+{
+    uint8_t i                           = 0;
+    uint8_t atmptCnt[UDS_SECUACCS1_LEN] = { 0x00 };
+
+    for (i = 0; i < UDS_SECUACCS1_LEN; i++)
+    {
+        atmptCnt[i] = g_SecuAccsStatus[i].atmptCnt;
+    }
+    (void)SecuAccs_NvmWrite(UDS_SECUACCS1_ADDR, atmptCnt, UDS_SECUACCS1_LEN);
+}
+
+/*******************************************************
+  * Name    :SecuAccs_TimerCtrl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void SecuAccs_TimerCtrl(void)
+{
+    uint8_t i = 0;
+
+    for (i = 0; i < SECUACCS_CFG_LIST_NUM; i++)
+    {
+        if (g_SecuAccsStatus[i].secuDelayTick != 0)
+        {
+            if (--g_SecuAccsStatus[i].secuDelayTick == 0)
+            {
+                if (g_SecuAccsStatus[i].atmptCnt > 0)
+                {
+                    g_SecuAccsStatus[i].atmptCnt--;
+                    g_SecuAccsStatus[i].secuDelayTick = g_SecuAccsCfgList[i].secuDelayMax;
+                }
+                SecuAccs_StorageDataToNvm();
+            }
+        }
+    }
+    if (++g_SecuAccsRand >= 0xFFFF)
+    {
+        g_SecuAccsRand = 1;
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_ResetSecurityStatus
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void SecuAccs_ResetSecurityStatus(void)
+{
+    uint8_t i                     = 0;
+
+    g_SecuAccsInfo.p_curCfg       = NULL;
+    g_SecuAccsInfo.p_curStatus    = NULL;
+    g_SecuAccsInfo.preSecAccsType = 0x00;
+    g_SecuAccsInfo.msgType        = SECUACCS_MSG_REQ_SEED;
+    g_SecuAccsInfo.state          = SECUACCS_STATE_ALL_SECULVL_LOCK;
+    for (i = 0; i < SECUACCS_CFG_LIST_NUM; i++)
+    {
+        g_SecuAccsStatus[i].seedActive = FALSE;
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_SetSecurityLevel
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void SecuAccs_SetSecurityLevel(Uds_DcmSecuLvl_Type secuLvl)
+{
+    if (secuLvl == UDS_DCM_SEC_LEV_NONE)
+    {
+        SecuAccs_ResetSecurityStatus();
+    }
+    SecuAccs_SetCurrentSecurityLevel(secuLvl);
+}
+
+/*******************************************************
+  * Name    :SecuAccs_EvalSequenceAndGenSeed
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static SecuAccs_Return_Type SecuAccs_EvalSequenceAndGenSeed(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t              i   = 0;
+    SecuAccs_Return_Type ret = SECUACCS_RET_NOT_OK;
+
+    if (p_msgContext->rxLen != 1)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return SECUACCS_RET_NOT_OK;
+    }
+
+    if (p_info->p_curStatus->secuDelayTick != 0 && p_info->p_curStatus->atmptCnt >= 3)
+    {
+        *p_errCode = UDS_DCM_E_NRC_RTDNE;
+        return SECUACCS_RET_NOT_OK;
+    }
+
+    if (SecuAccs_GetCurrentSecurityLevel() == p_info->p_curCfg->secuAccsLvl)
+    {
+        for (i = 0; i < p_info->p_curCfg->seedSize; i++)
+        {
+            p_info->p_curStatus->seed[i] = 0x00;
+        }
+        ret = SECUACCS_RET_REQ_UNLOCK;
+    }
+    else
+    {
+        if (p_msgContext->subFun != p_info->preSecAccsType)
+        {
+            p_info->preSecAccsType = p_msgContext->subFun;
+            p_info->p_curCfg->getSeedKeyFun(p_info->p_curStatus->seed, p_info->p_curStatus->key);
+            p_info->p_curStatus->seedActive = TRUE;
+            ret                             = SECUACCS_RET_NEW_SEED;
+        }
+        else
+        {
+            if ((p_info->p_curCfg->staticSeed == FALSE) || (p_info->p_curStatus->seedActive == FALSE))
+            {
+                p_info->p_curCfg->getSeedKeyFun(p_info->p_curStatus->seed, p_info->p_curStatus->key);
+                p_info->p_curStatus->seedActive = TRUE;
+            }
+            ret = SECUACCS_RET_OK;
+        }
+    }
+    p_msgContext->p_txData[0] = p_msgContext->subFun;
+    for (i = 0; i < p_info->p_curCfg->seedSize; i++)
+    {
+        p_msgContext->p_txData[i + 1] = p_info->p_curStatus->seed[i];
+    }
+    p_msgContext->txLen = p_info->p_curCfg->seedSize + 1;
+    return ret;
+}
+
+/*******************************************************
+  * Name    :SecuAccs_EvalSequenceAndCompareKey
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static SecuAccs_Return_Type SecuAccs_EvalSequenceAndCompareKey(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    Bool ret = TRUE;
+
+    if (p_msgContext->rxLen != (p_info->p_curCfg->keySize + 1))
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        ret        = FALSE;
+    }
+    else if (p_msgContext->subFun != (p_info->p_curCfg->secuAccsType + 1))
+    {
+        *p_errCode = UDS_DCM_E_NRC_RSE;
+        ret        = FALSE;
+    }
+    else if (SecuAccs_Compare(p_info->p_curStatus->key, &p_msgContext->p_rxData[1], p_info->p_curCfg->keySize) == FALSE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IK;
+        ret        = FALSE;
+    }
+    if (ret == FALSE)
+    {
+        if (*p_errCode != UDS_DCM_E_NRC_IK)
+        {
+            return SECUACCS_RET_NOT_OK;
+        }
+        if (++p_info->p_curStatus->atmptCnt >= p_info->p_curCfg->atmptCntMax)
+        {
+            *p_errCode                         = UDS_DCM_E_NRC_ENOA;
+            p_info->p_curStatus->atmptCnt      = p_info->p_curCfg->atmptCntMax;
+            p_info->p_curStatus->secuDelayTick = p_info->p_curCfg->secuDelayMax;
+        }
+        SecuAccs_StorageDataToNvm();
+        return SECUACCS_RET_NOT_OK;
+    }
+    else
+    {
+        p_info->p_curStatus->atmptCnt = 0;
+        p_msgContext->p_txData[0]     = p_msgContext->subFun;
+        p_msgContext->txLen           = 1;
+        SecuAccs_StorageDataToNvm();
+        return SECUACCS_RET_OK;
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_UnLockEvalSequenceAndGenSeed
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static SecuAccs_Return_Type SecuAccs_UnLockEvalSequenceAndGenSeed(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t              i   = 0;
+    SecuAccs_Return_Type ret = SECUACCS_RET_NOT_OK;
+
+    if (p_msgContext->rxLen != 1)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return SECUACCS_RET_NOT_OK;
+    }
+
+    if (p_info->p_curStatus->secuDelayTick != 0 && p_info->p_curStatus->atmptCnt >= 3)
+    {
+        *p_errCode = UDS_DCM_E_NRC_RTDNE;
+        return SECUACCS_RET_NOT_OK;
+    }
+
+    if (SecuAccs_GetCurrentSecurityLevel() == p_info->p_curCfg->secuAccsLvl)
+    {
+        for (i = 0; i < p_info->p_curCfg->seedSize; i++)
+        {
+            p_info->p_curStatus->seed[i] = 0x00;
+        }
+        ret = SECUACCS_RET_REQ_UNLOCK;
+    }
+    else
+    {
+        p_info->p_curCfg->getSeedKeyFun(p_info->p_curStatus->seed, p_info->p_curStatus->key);
+        ret = SECUACCS_RET_OK;
+    }
+
+    p_msgContext->p_txData[0] = p_msgContext->subFun;
+    for (i = 0; i < p_info->p_curCfg->seedSize; i++)
+    {
+        p_msgContext->p_txData[i + 1] = p_info->p_curStatus->seed[i];
+    }
+    p_msgContext->txLen = p_info->p_curCfg->seedSize + 1;
+    return ret;
+}
+
+/*******************************************************
+  * Name    :SecuAccs_AllSecuLvlLock
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type SecuAccs_AllSecuLvlLock(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    if (p_info->msgType == SECUACCS_MSG_REQ_SEED)
+    {
+        if (SecuAccs_EvalSequenceAndGenSeed(p_info, p_msgContext, p_errCode) != SECUACCS_RET_NOT_OK)
+        {
+            p_info->state                   = SECUACCS_STATE_SEED_SEND_WAIT_KEY;
+            p_info->preSecAccsType          = p_msgContext->subFun;
+            p_info->p_curStatus->seedActive = TRUE;
+            return RET_OK;
+        }
+        else
+        {
+            return RET_NOT_OK;
+        }
+    }
+    else
+    {
+        *p_errCode = UDS_DCM_E_NRC_RSE;
+        return RET_NOT_OK;
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_SeedSendWaitKey
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type SecuAccs_SeedSendWaitKey(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    if (p_info->msgType == SECUACCS_MSG_REQ_SEED)
+    {
+        if (SecuAccs_EvalSequenceAndGenSeed(p_info, p_msgContext, p_errCode) != SECUACCS_RET_NOT_OK)
+        {
+            p_info->state                   = SECUACCS_STATE_SEED_SEND_WAIT_KEY;
+            p_info->p_curStatus->seedActive = TRUE;
+            return RET_OK;
+        }
+        else
+        {
+            p_info->state                   = SECUACCS_STATE_ALL_SECULVL_LOCK;
+            p_info->p_curStatus->seedActive = FALSE;
+            return RET_NOT_OK;
+        }
+    }
+    else
+    {
+        if (SecuAccs_EvalSequenceAndCompareKey(p_info, p_msgContext, p_errCode) == SECUACCS_RET_OK)
+        {
+            SecuAccs_SetSecurityLevel(p_info->p_curCfg->secuAccsLvl);
+            p_info->state                   = SECUACCS_STATE_ONE_SECULVL_UNLOCK;
+            p_info->p_curStatus->seedActive = FALSE;
+            p_info->preSecAccsType          = 0x00;
+            return RET_OK;
+        }
+        else
+        {
+            p_info->state                   = SECUACCS_STATE_ALL_SECULVL_LOCK;
+            p_info->p_curStatus->seedActive = FALSE;
+            p_info->preSecAccsType          = 0x00;
+            return RET_NOT_OK;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_OneSecuLvlUnLock
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type SecuAccs_OneSecuLvlUnLock(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    SecuAccs_Return_Type ret = SECUACCS_RET_NOT_OK;
+
+    if (p_info->msgType == SECUACCS_MSG_REQ_SEED)
+    {
+        ret = SecuAccs_UnLockEvalSequenceAndGenSeed(p_info, p_msgContext, p_errCode);
+        if (ret != SECUACCS_RET_NOT_OK)
+        {
+            if (ret == SECUACCS_RET_REQ_UNLOCK)
+            {
+                p_info->state = SECUACCS_STATE_ONE_SECULVL_UNLOCK;
+            }
+            else
+            {
+                p_info->state = SECUACCS_STATE_ONE_UNLOCK_WAIT_KEY;
+            }
+            p_info->preSecAccsType          = p_msgContext->subFun;
+            p_info->p_curStatus->seedActive = TRUE;
+            return RET_OK;
+        }
+        else
+        {
+            return RET_NOT_OK;
+        }
+    }
+    else
+    {
+        *p_errCode = UDS_DCM_E_NRC_RSE;
+        return RET_NOT_OK;
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_OneUnLockWaitKey
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type SecuAccs_OneUnLockWaitKey(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    SecuAccs_Return_Type ret = SECUACCS_RET_NOT_OK;
+
+    if (p_info->msgType == SECUACCS_MSG_REQ_SEED)
+    {
+        ret = SecuAccs_EvalSequenceAndGenSeed(p_info, p_msgContext, p_errCode);
+        if (ret == SECUACCS_RET_OK)
+        {
+            p_info->p_curStatus->seedActive = TRUE;
+            return RET_OK;
+        }
+        else if (ret == SECUACCS_RET_REQ_UNLOCK)
+        {
+            p_info->state = SECUACCS_STATE_ONE_SECULVL_UNLOCK;
+            return RET_OK;
+        }
+        else
+        {
+            return RET_NOT_OK;
+        }
+    }
+    else
+    {
+        if (SecuAccs_EvalSequenceAndCompareKey(p_info, p_msgContext, p_errCode) == SECUACCS_RET_OK)
+        {
+            SecuAccs_SetSecurityLevel(p_info->p_curCfg->secuAccsLvl);
+            p_info->state                   = SECUACCS_STATE_ONE_SECULVL_UNLOCK;
+            p_info->p_curStatus->seedActive = FALSE;
+            p_info->preSecAccsType          = 0x00;
+            return RET_OK;
+        }
+        else
+        {
+            p_info->state                   = SECUACCS_STATE_ONE_SECULVL_UNLOCK;
+            p_info->p_curStatus->seedActive = FALSE;
+            p_info->preSecAccsType          = 0x00;
+            return RET_NOT_OK;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :SecuAccs_ManageStatusExe
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type SecuAccs_ManageStatusExe(SecuAccs_Info_Type *p_info, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    switch (p_info->state)
+    {
+        case SECUACCS_STATE_ALL_SECULVL_LOCK:
+            return SecuAccs_AllSecuLvlLock(p_info, p_msgContext, p_errCode);
+        case SECUACCS_STATE_SEED_SEND_WAIT_KEY:
+            return SecuAccs_SeedSendWaitKey(p_info, p_msgContext, p_errCode);
+        case SECUACCS_STATE_ONE_SECULVL_UNLOCK:
+            return SecuAccs_OneSecuLvlUnLock(p_info, p_msgContext, p_errCode);
+        case SECUACCS_STATE_ONE_UNLOCK_WAIT_KEY:
+            return SecuAccs_OneUnLockWaitKey(p_info, p_msgContext, p_errCode);
+        default:
+            break;
+    }
+    *p_errCode = UDS_DCM_E_NRC_CNC;
+    return RET_NOT_OK;
+}
+
+/*******************************************************
+  * Name    :SecuAccs_0x27SecurityAccess
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type SecuAccs_0x27SecurityAccess(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t i = 0;
+
+    if (opStatus != UDS_DCM_INITIAL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    for (i = 0; i < SECUACCS_CFG_LIST_NUM; i++)
+    {
+        if (p_msgContext->subFun == g_SecuAccsCfgList[i].secuAccsType)
+        {
+            g_SecuAccsInfo.msgType = SECUACCS_MSG_REQ_SEED;
+            break;
+        }
+        if (p_msgContext->subFun == (g_SecuAccsCfgList[i].secuAccsType + 1))
+        {
+            g_SecuAccsInfo.msgType = SECUACCS_MSG_SEND_KEY;
+            break;
+        }
+    }
+    if (i >= SECUACCS_CFG_LIST_NUM)
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+
+    g_SecuAccsInfo.p_curCfg    = &g_SecuAccsCfgList[i];
+    g_SecuAccsInfo.p_curStatus = &g_SecuAccsStatus[i];
+    return SecuAccs_ManageStatusExe(&g_SecuAccsInfo, p_msgContext, p_errCode);
+}
+

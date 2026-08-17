@@ -1,0 +1,743 @@
+/*******************************************************
+  * Name    :Dtc.c
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+/*-------------include file---------------------------*/
+#include "Dtc_Cfg.h"
+/*-------------variable statement---------------------*/
+static Bool           g_DtcIsClosen = FALSE;
+static Dtc_Data_Type  g_DtcData[DTC_CFG_LIST_NUM];
+static Dtc_Count_Type g_DtcCount[DTC_CFG_LIST_NUM];
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :Dtc_ClearRamData
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Dtc_ClearRamData(uint16_t index, uint8_t operation)
+{
+    if (DTC_AUTO_CLEAR == operation)
+    {
+        //    g_DtcCount[index].aged       = 0x00;
+    }
+    else if (DTC_ORDER_CLEAR == operation)
+    {
+        g_DtcCount[index].aged = 0x00;
+    }
+    g_DtcData[index].status      = 0x00;
+    //    g_DtcCount[index].aged       = 0x00;
+    g_DtcCount[index].occurrence = 0;
+    g_DtcCount[index].aging      = 0;
+}
+
+/*******************************************************
+  * Name    :Dtc_ClearDataInfomation
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type Dtc_ClearDataInfomation(Bool isInit, uint32_t groupId)
+{
+    (void)groupId;
+    Return_Type     ret = RET_NOT_OK;
+    static Bool     lastDtcIsClosen;
+    static uint32_t waitTime          = 0;
+    uint8_t         buff[UDS_DTC_LEN] = { 0x00 };
+
+    if (isInit == TRUE)
+    {
+        lastDtcIsClosen = g_DtcIsClosen;
+        g_DtcIsClosen   = TRUE;
+        if (Dtc_NvmWrite(UDS_DTC_ADDR, buff, UDS_DTC_LEN) == FALSE)
+        {
+            g_DtcIsClosen = lastDtcIsClosen;
+            return RET_NOT_OK;
+        }
+        waitTime = Dtc_GetSysTimeMs();
+    }
+    else
+    {
+        if ((Dtc_GetSysTimeMs() - waitTime) <= 30)
+        {
+            return RET_RCRRP;
+        }
+
+        ret = Dtc_NvmGetProgramStatus();
+        if (ret == RET_RCRRP)
+        {
+            return RET_RCRRP;
+        }
+        else if (ret == RET_NOT_OK)
+        {
+            g_DtcIsClosen = lastDtcIsClosen;
+            return RET_NOT_OK;
+        }
+
+        for (uint8_t i = 0; i < DTC_CFG_LIST_NUM; i++)
+        {
+            Dtc_ClearRamData(i, DTC_ORDER_CLEAR);
+        }
+
+        g_DtcIsClosen = lastDtcIsClosen;
+        return RET_OK;
+    }
+    return RET_RCRRP;
+}
+
+/*******************************************************
+  * Name    :Dtc_ReportNumberByMask
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static uint16_t Dtc_ReportNumberByMask(uint8_t mask)
+{
+    uint16_t i      = 0;
+    uint16_t number = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        if (g_DtcData[i].status & (mask & DTC_SUPPORT_MASK))
+        {
+            number++;
+        }
+    }
+    return number;
+}
+
+/*******************************************************
+  * Name    :Dtc_ReportInfoByMask
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static uint16_t Dtc_ReportInfoByMask(uint8_t mask, uint8_t *p_buff)
+{
+    uint16_t i   = 0;
+    uint16_t len = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        if (g_DtcData[i].status & (mask & DTC_SUPPORT_MASK))
+        {
+            p_buff[len++] = (uint8_t)((g_DtcCfgList[i].groupId >> 16) & 0xFF);
+            p_buff[len++] = (uint8_t)((g_DtcCfgList[i].groupId >> 8) & 0xFF);
+            p_buff[len++] = (uint8_t)((g_DtcCfgList[i].groupId >> 0) & 0xFF);
+            p_buff[len++] = (uint8_t)(g_DtcData[i].status & DTC_SUPPORT_MASK);
+        }
+    }
+    return len;
+}
+
+/*******************************************************
+  * Name    :Dtc_ReportSnapShotByNumber
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Dtc_ReportSnapShotByNumber(uint32_t groupId, uint8_t number, uint8_t *p_buff, uint16_t *p_len)
+{
+    uint16_t i   = 0;
+    uint16_t len = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        if (g_DtcCfgList[i].groupId != groupId)
+        {
+            continue;
+        }
+        switch (number)
+        {
+            case 0x01:
+            case 0xFF:
+                p_buff[len++] = (uint8_t)((groupId >> 16) & 0xFF);
+                p_buff[len++] = (uint8_t)((groupId >> 8) & 0xFF);
+                p_buff[len++] = (uint8_t)((groupId >> 0) & 0xFF);
+                p_buff[len++] = (uint8_t)(g_DtcData[i].status & DTC_SUPPORT_MASK);
+                if ((g_DtcData[i].status & DTC_SUPPORT_MASK) != 0x00)
+                {
+                    p_buff[len++] = 0x01;
+                    p_buff[len++] = 0x03;
+                    p_buff[len++] = 0x08;
+                    p_buff[len++] = 0xA0;
+                    //p_buff[len++] = g_DtcData[i].voltage;
+                    p_buff[len++] = 0x08;
+                    p_buff[len++] = 0xA1;
+                    //p_buff[len++] = g_DtcData[i].ignStatus;
+                }
+                break;
+            default:
+                break;
+        }
+        break;
+    }
+    if (len == 0)
+    {
+        return FALSE;
+    }
+    *p_len = len;
+    return TRUE;
+}
+
+/*******************************************************
+  * Name    :Dtc_ReportExtDataByNumber
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Dtc_ReportExtDataByNumber(uint32_t groupId, uint8_t number, uint8_t *p_buff, uint16_t *p_len)
+{
+    uint16_t i   = 0;
+    uint16_t len = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        if (g_DtcCfgList[i].groupId != groupId)
+        {
+            continue;
+        }
+        switch (number)
+        {
+            case 0x01:
+            case 0xFF:
+                p_buff[len++] = (uint8_t)((groupId >> 16) & 0xFF);
+                p_buff[len++] = (uint8_t)((groupId >> 8) & 0xFF);
+                p_buff[len++] = (uint8_t)((groupId >> 0) & 0xFF);
+                p_buff[len++] = (uint8_t)(g_DtcData[i].status & DTC_SUPPORT_MASK);
+                if ((g_DtcData[i].status & DTC_SUPPORT_MASK) != 0x00)
+                {
+                    p_buff[len++] = 0x01;
+                    p_buff[len++] = g_DtcCount[i].occurrence;
+                    p_buff[len++] = g_DtcCount[i].aged;
+                    p_buff[len++] = g_DtcCount[i].aging;
+                }
+                break;
+            default:
+                break;
+        }
+        break;
+    }
+    if (len == 0)
+    {
+        return FALSE;
+    }
+    *p_len = len;
+    return TRUE;
+}
+
+/*******************************************************
+  * Name    :Dtc_ReadListSupported
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static uint16_t Dtc_ReadListSupported(uint8_t *p_buff)
+{
+    uint16_t i   = 0;
+    uint16_t len = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        p_buff[len++] = (uint8_t)((g_DtcCfgList[i].groupId >> 16) & 0xFF);
+        p_buff[len++] = (uint8_t)((g_DtcCfgList[i].groupId >> 8) & 0xFF);
+        p_buff[len++] = (uint8_t)((g_DtcCfgList[i].groupId >> 0) & 0xFF);
+        p_buff[len++] = (uint8_t)(g_DtcData[i].status & DTC_SUPPORT_MASK);
+    }
+    return len;
+}
+
+/*******************************************************
+  * Name    :Dtc_Init
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Dtc_Init(void)
+{
+    uint16_t i = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        g_DtcData[i].status  = 0x00;
+        g_DtcData[i].storage = FALSE;
+    }
+    g_DtcIsClosen = FALSE;
+    Dtc_SetDtcDeactiveFlag(TRUE);
+}
+
+/*******************************************************
+  * Name    :Dtc_ReadDateFromEeprom
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Dtc_ReadDateFromEeprom(void)
+{
+    uint16_t         i                 = 0;
+    uint8_t          buff[UDS_DTC_LEN] = { 0x00 };
+    Dtc_Eeprom_Type *p_eeprom          = NULL;
+
+    if (Dtc_NvmRead(UDS_DTC_ADDR, buff, UDS_DTC_LEN) == FALSE)
+    {
+        return FALSE;
+    }
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        p_eeprom = (Dtc_Eeprom_Type *)(&buff[i * 4]);
+        if (p_eeprom->aging > DTC_ALLOW_MAX_AGING_CNT)
+        {
+            g_DtcCount[i].aged       = 0;
+            g_DtcCount[i].occurrence = 0;
+            g_DtcCount[i].aging      = 0;
+        }
+        else
+        {
+            g_DtcCount[i].aged       = p_eeprom->aged;
+            g_DtcCount[i].occurrence = p_eeprom->occurrence;
+            g_DtcCount[i].aging      = p_eeprom->aging;
+            if ((p_eeprom->dtcStatus & DTC_CONFIRMED) != 0)
+            {
+                g_DtcData[i].status = DTC_CONFIRMED;
+            }
+            else
+            {
+                g_DtcData[i].status = 0x00;
+            }
+        }
+    }
+    return TRUE;
+}
+
+/*******************************************************
+  * Name    :Dtc_WriteDataToEeprom
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Dtc_WriteDataToEeprom(void)
+{
+    static uint16_t  i           = 0;
+    Bool             checkStatus = FALSE;
+    uint8_t          buff[4]     = { 0x00 };
+    Dtc_Eeprom_Type *p_eeprom    = NULL;
+
+    if (checkStatus == TRUE)
+    {
+        if (Dtc_NvmGetProgramStatus() != RET_RCRRP)
+        {
+            checkStatus = FALSE;
+        }
+        return;
+    }
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        if (g_DtcData[i].storage == TRUE)
+        {
+            g_DtcData[i].storage = FALSE;
+            p_eeprom             = (Dtc_Eeprom_Type *)buff;
+            p_eeprom->dtcStatus  = g_DtcData[i].status & DTC_CONFIRMED;
+            p_eeprom->aged       = g_DtcCount[i].aged;
+            p_eeprom->occurrence = g_DtcCount[i].occurrence;
+            p_eeprom->aging      = g_DtcCount[i].aging;
+            if (Dtc_NvmWrite(UDS_DTC_ADDR + (4 * i), buff, 4) == TRUE)
+            {
+                checkStatus = TRUE;
+            }
+        }
+    }
+    if (i >= DTC_CFG_LIST_NUM)
+    {
+        i = 0;
+    }
+}
+
+/*******************************************************
+  * Name    :Dtc_DataInfoAutoClear
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Dtc_DataInfoAutoClear(void)
+{
+    uint16_t    i         = 0;
+    static Bool ignStatus = FALSE;
+
+    if ((ignStatus == 0) && (Dtc_GetIgnStatusFlag() == TRUE))
+    {
+        for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+        {
+            if ((g_DtcData[i].status & DTC_CONFIRMED) == 0x00)
+            {
+                g_DtcCount[i].aging = 0;
+                continue;
+            }
+            g_DtcData[i].storage = TRUE;
+            if (++g_DtcCount[i].aging >= g_DtcCfgList[i].agingThres)
+            {
+                Dtc_ClearRamData(i, DTC_AUTO_CLEAR);
+                g_DtcCount[i].aged++;
+                //                g_DtcData[i].storage = TRUE;
+            }
+        }
+    }
+    ignStatus = Dtc_GetIgnStatusFlag();
+}
+
+/*******************************************************
+  * Name    :Dtc_DataInfoFaultCheck
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Dtc_DataInfoFaultCheck(void)
+{
+    uint16_t i = 0;
+
+    for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+    {
+        if (Dtc_GetDtcCurErrFlag(g_DtcCfgList[i].id) == TRUE)
+        {
+            if ((g_DtcData[i].status & DTC_TEST_FAILED) == 0x00)
+            {
+                g_DtcCount[i].occurrence++;
+                g_DtcCount[i].aging  = 0;
+                g_DtcData[i].status  = DTC_CONFIRMED + DTC_TEST_FAILED;
+                g_DtcData[i].storage = TRUE;
+            }
+        }
+        else
+        {
+            g_DtcData[i].status &= ~DTC_TEST_FAILED;
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :Dtc_NormalOperation
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Dtc_NormalOperation(void)
+{
+    Dtc_WriteDataToEeprom();
+    Dtc_DataInfoAutoClear();
+    Dtc_DataInfoFaultCheck();
+}
+
+/*******************************************************
+  * Name    :Dtc_ReturnRecord
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Dtc_ReturnRecord(void)
+{
+    g_DtcIsClosen = FALSE;
+}
+
+/*******************************************************
+  * Name    :Dtc_Main
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Dtc_Main(void)
+{
+    static uint16_t      waitTime = 0;
+    static uint8_t       retryCnt = 0;
+    static Dtc_Mode_Type dtcMode  = DTC_MODE_INIT;
+
+    switch (dtcMode)
+    {
+        case DTC_MODE_INIT:
+            Dtc_Init();
+            retryCnt = 0;
+            waitTime = Dtc_GetSysTimeMs();
+            dtcMode  = DTC_MODE_WAIT;
+            break;
+        case DTC_MODE_WAIT:
+            if ((Dtc_GetSysTimeMs() - waitTime) >= DTC_ACTIVE_TIME)
+            {
+                Dtc_SetDtcDeactiveFlag(FALSE);
+                dtcMode = DTC_MODE_READ;
+            }
+            break;
+        case DTC_MODE_READ:
+            if (Dtc_ReadDateFromEeprom() == TRUE)
+            {
+                dtcMode = DTC_MODE_NORMAL;
+            }
+            else
+            {
+                if (++retryCnt >= DTC_RETRY_MAX_CNT)
+                {
+                    dtcMode = DTC_MODE_NORMAL;
+                }
+                else
+                {
+                    waitTime = Dtc_GetSysTimeMs();
+                    dtcMode  = DTC_MODE_WAIT;
+                }
+            }
+            break;
+        case DTC_MODE_NORMAL:
+            Dtc_NormalOperation();
+            if (g_DtcIsClosen == TRUE)
+            {
+                Dtc_SetDtcDeactiveFlag(TRUE);
+                dtcMode = DTC_MODE_CLOSED;
+            }
+            break;
+        case DTC_MODE_CLOSED:
+            if (g_DtcIsClosen == FALSE)
+            {
+                Dtc_SetDtcDeactiveFlag(FALSE);
+                dtcMode = DTC_MODE_NORMAL;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/*******************************************************
+  * Name    :Dtc_0x14ClearDiagnosticInformation
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Dtc_0x14ClearDiagnosticInformation(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint16_t        i       = 0;
+    static uint32_t groupId = 0;
+    Return_Type     ret     = RET_NOT_OK;
+
+    if (opStatus == UDS_DCM_INITIAL)
+    {
+        if (p_msgContext->rxLen != 3)
+        {
+            *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+            return RET_NOT_OK;
+        }
+
+        groupId  = (uint32_t)(p_msgContext->p_rxData[0] << 16);
+        groupId += (uint32_t)(p_msgContext->p_rxData[1] << 8);
+        groupId += (uint32_t)(p_msgContext->p_rxData[2] << 0);
+        if ((groupId != 0x800000) && (groupId != 0xC00000) && (groupId != 0xFFFFFF))
+        {
+            for (i = 0; i < DTC_CFG_LIST_NUM; i++)
+            {
+                if (groupId == g_DtcCfgList[i].groupId)
+                {
+                    break;
+                }
+            }
+            if (i >= DTC_CFG_LIST_NUM)
+            {
+                *p_errCode = UDS_DCM_E_NRC_ROOR;
+                return RET_NOT_OK;
+            }
+
+            if (((1 << Dtc_GetCurrentSessionMode()) & g_DtcCfgList[i].supSessMode) == FALSE)
+            {
+                *p_errCode = UDS_DCM_E_NRC_ROOR;
+                return RET_NOT_OK;
+            }
+        }
+
+        if (Dtc_CheckIfService0x14ConditionsNotCorrect(groupId) == TRUE)
+        {
+            *p_errCode = UDS_DCM_E_NRC_CNC;
+            return RET_NOT_OK;
+        }
+
+        p_msgContext->finalRespNrc = UDS_DCM_E_NRC_GPF;
+        ret                        = Dtc_ClearDataInfomation(TRUE, groupId);
+        if (ret == RET_NOT_OK)
+        {
+            *p_errCode = UDS_DCM_E_NRC_CNC;
+            return RET_NOT_OK;
+        }
+    }
+    else
+    {
+        ret = Dtc_ClearDataInfomation(FALSE, groupId);
+        if (ret == RET_NOT_OK)
+        {
+            *p_errCode = UDS_DCM_E_NRC_CNC;
+            return RET_NOT_OK;
+        }
+
+        if (ret == RET_OK)
+        {
+            p_msgContext->txLen = 0;
+            return RET_OK;
+        }
+    }
+    return RET_RCRRP;
+}
+
+/*******************************************************
+  * Name    :Dtc_0x19ReadDtcInformation
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Dtc_0x19ReadDtcInformation(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t  mask    = 0;
+    uint16_t len     = 0;
+    uint16_t number  = 0;
+    uint32_t groupId = 0;
+
+    if (opStatus != UDS_DCM_INITIAL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->rxLen < 1)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    if (((p_msgContext->subFun == 0x01) && (p_msgContext->rxLen != 2))
+        || ((p_msgContext->subFun == 0x02) && (p_msgContext->rxLen != 2))
+        //        || ((p_msgContext->subFun == 0x04) && (p_msgContext->rxLen != 5))
+        || ((p_msgContext->subFun == 0x06) && (p_msgContext->rxLen != 5))
+        || ((p_msgContext->subFun == 0x0A) && (p_msgContext->rxLen != 1)))
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    if (Dtc_CheckIfService0x19ConditionsNotCorrect() == TRUE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    switch (p_msgContext->subFun)
+    {
+        case 0x01:
+            mask                      = p_msgContext->p_rxData[1];
+            number                    = Dtc_ReportNumberByMask(mask);
+            p_msgContext->p_txData[0] = p_msgContext->p_rxData[0];
+            p_msgContext->p_txData[1] = DTC_SUPPORT_MASK;
+            p_msgContext->p_txData[2] = DTC_FORMAT_ISO_14229;
+            p_msgContext->p_txData[3] = (uint8_t)((number >> 8) & 0xFF);
+            p_msgContext->p_txData[4] = (uint8_t)((number >> 0) & 0xFF);
+            p_msgContext->txLen       = 5;
+            break;
+        case 0x02:
+            mask                      = p_msgContext->p_rxData[1];
+            p_msgContext->p_txData[0] = p_msgContext->p_rxData[0];
+            p_msgContext->p_txData[1] = DTC_SUPPORT_MASK;
+            p_msgContext->txLen       = Dtc_ReportInfoByMask(mask, &p_msgContext->p_txData[2]) + 2;
+            break;
+        case 0x04:
+            groupId                    = (uint32_t)(p_msgContext->p_rxData[1] << 16);
+            groupId                   += (uint32_t)(p_msgContext->p_rxData[2] << 8);
+            groupId                   += (uint32_t)(p_msgContext->p_rxData[3] << 0);
+            number                     = p_msgContext->p_rxData[4];
+            p_msgContext->p_txData[0]  = p_msgContext->p_rxData[0];
+            if (Dtc_ReportSnapShotByNumber(groupId, number, &p_msgContext->p_txData[1], &len) == FALSE)
+            {
+                *p_errCode = UDS_DCM_E_NRC_ROOR;
+                return RET_NOT_OK;
+            }
+            p_msgContext->txLen = len + 1;
+            break;
+        case 0x06:
+            groupId                    = (uint32_t)(p_msgContext->p_rxData[1] << 16);
+            groupId                   += (uint32_t)(p_msgContext->p_rxData[2] << 8);
+            groupId                   += (uint32_t)(p_msgContext->p_rxData[3] << 0);
+            number                     = p_msgContext->p_rxData[4];
+            p_msgContext->p_txData[0]  = p_msgContext->p_rxData[0];
+            if (Dtc_ReportExtDataByNumber(groupId, number, &p_msgContext->p_txData[1], &len) == FALSE)
+            {
+                *p_errCode = UDS_DCM_E_NRC_ROOR;
+                return RET_NOT_OK;
+            }
+            p_msgContext->txLen = len + 1;
+            break;
+        case 0x0A:
+            p_msgContext->p_txData[0] = p_msgContext->p_rxData[0];
+            p_msgContext->p_txData[1] = DTC_SUPPORT_MASK;
+            p_msgContext->txLen       = Dtc_ReadListSupported(&p_msgContext->p_txData[2]) + 2;
+            break;
+        default:
+            break;
+    }
+    return RET_OK;
+}
+
+/*******************************************************
+  * Name    :Dtc_0x85ControlDtcSetting
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type Dtc_0x85ControlDtcSetting(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    if (opStatus != UDS_DCM_INITIAL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->rxLen != 1)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    if (Dtc_CheckIfService0x85ConditionsNotCorrect() == TRUE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    p_msgContext->p_txData[0] = p_msgContext->p_rxData[0];
+    p_msgContext->txLen       = 1;
+    if (p_msgContext->subFun == 0x01)
+    {
+        g_DtcIsClosen = FALSE;
+        return RET_OK;
+    }
+
+    if (p_msgContext->subFun == 0x02)
+    {
+        g_DtcIsClosen = TRUE;
+        return RET_OK;
+    }
+    *p_errCode = UDS_DCM_E_NRC_CNC;
+    return RET_NOT_OK;
+}
+

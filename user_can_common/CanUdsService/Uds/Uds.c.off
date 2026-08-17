@@ -1,0 +1,771 @@
+/*******************************************************
+  * Name    :Uds.c
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+/*-------------include file---------------------------*/
+#include "UDS_Cfg.h"
+#include "RteSys.h"
+/*-------------variable statement---------------------*/
+static Uds_TimeTick_Type g_UdsTimeTick;
+static Uds_Status_Type   g_UdsStatus;
+static Uds_DslRxPdu_Type g_UdsDslRxPdu;
+static Uds_DslTxPdu_Type g_UdsDslTxPdu;
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :Uds_TimerCtrl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Uds_TimerCtrl(void)
+{
+    if (g_UdsTimeTick.diagActive > 0)
+    {
+        g_UdsTimeTick.diagActive--;
+    }
+
+    if (g_UdsTimeTick.s3Server > 0)
+    {
+        g_UdsTimeTick.s3Server--;
+    }
+
+    if (g_UdsTimeTick.p2Server > 0)
+    {
+        g_UdsTimeTick.p2Server--;
+    }
+    Uds_IoCtrTimerCtrl();
+    Uds_SecuAccsTimerCtrl();
+}
+
+/*******************************************************
+  * Name    :Uds_GetCurrentSessionMode
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Uds_DcmSessMode_Type Uds_GetCurrentSessionMode(void)
+{
+    return g_UdsStatus.curSessMode;
+}
+
+/*******************************************************
+  * Name    :Uds_GetCurrentSecurityLevel
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Uds_DcmSecuLvl_Type Uds_GetCurrentSecurityLevel(void)
+{
+    return g_UdsStatus.curSecuLvl;
+}
+
+/*******************************************************
+  * Name    :secuLvl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Uds_SetCurrentSecurityLevel(Uds_DcmSecuLvl_Type secuLvl)
+{
+    g_UdsStatus.curSecuLvl = secuLvl;
+}
+
+/*******************************************************
+  * Name    :Uds_ResetDiagActiveTime
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_ResetDiagActiveTime(void)
+{
+    g_UdsTimeTick.diagActive = g_UdsGenCfg.diagActiveDelay;
+}
+
+/*******************************************************
+  * Name    :Uds_StopS3ServerTime
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Uds_ResetS3ServerTime(void)
+{
+    g_UdsTimeTick.s3Server = g_UdsGenCfg.s3ServerMax + 2;
+}
+
+/*******************************************************
+  * Name    :Uds_StopS3ServerTime
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_StopS3ServerTime(void)
+{
+    g_UdsTimeTick.s3Server = 0;
+}
+
+/*******************************************************
+  * Name    :Uds_ResetP2ServerTime
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_ResetP2ServerTime(void)
+{
+    g_UdsTimeTick.p2Server = g_UdsGenCfg.p2ServerMax;
+}
+
+/*******************************************************
+  * Name    :Uds_ResetP2StartServerTime
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_ResetP2StartServerTime(void)
+{
+    g_UdsTimeTick.p2Server = g_UdsGenCfg.p2StartServerMax;
+}
+
+/*******************************************************
+  * Name    :Uds_StopS3ServerTime
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_StopP2ServerTime(void)
+{
+    g_UdsTimeTick.p2Server = 0;
+}
+
+/*******************************************************
+  * Name    :UDS_DslNegativeResponse
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool UDS_DslNegativeResponse(Frame_Type frame, uint8_t sid, Uds_DcmNegRespCode_Type nrc)
+{
+    static uint8_t buffer[3] = { 0x00 };
+
+    if ((g_UdsStatus.context.reqType == UDS_DSL_FUN_ADDR)
+        && ((nrc == UDS_DCM_E_NRC_SNS)
+            || (nrc == UDS_DCM_E_NRC_SFNS)
+            || (nrc == UDS_DCM_E_NRC_ROOR)
+            //|| (nrc == UDS_DCM_E_NRC_SFNSIAS)
+            //            || (nrc == UDS_DCM_E_NRC_SNSIAS)
+            ))
+    {
+        return TRUE;
+    }
+
+    buffer[0] = 0x7F;
+    buffer[1] = sid;
+    buffer[2] = nrc;
+    return Uds_TxUdsTpMsg(frame, g_UdsGenCfg.diagRespId, buffer, 3);
+}
+
+/*******************************************************
+  * Name    :Uds_DslPositiveResponse
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Uds_DslPositiveResponse(Frame_Type frame, uint8_t *p_buff, uint16_t len)
+{
+    return Uds_TxUdsTpMsg(frame, g_UdsGenCfg.diagRespId, p_buff, len);
+}
+
+/*******************************************************
+  * Name    :Uds_DcmResetToDefaultSession
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DcmResetToDefaultSession(void)
+{
+    Uds_StopS3ServerTime();
+    Uds_StopP2ServerTime();
+    Uds_DtcReturnRecord();
+    Uds_IoReturnControlToEcu();
+    Uds_SwtichCtlByDefaultSession();
+    g_UdsStatus.curSessMode = UDS_DCM_DEFAULT_SESSION;
+    if (RteSys_GetU8Sig(RTESYS_U8_INTO_TEST_MODE))
+    {
+        RteSys_SetU8Sig(RTESYS_U8_INTO_TEST_MODE, FALSE);
+    }
+}
+
+/*******************************************************
+  * Name    :Uds_DslSetSessionMode
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Uds_DslSetSessionMode(Uds_DcmSessMode_Type sessMode)
+{
+    if (g_UdsStatus.curSessMode != sessMode)
+    {
+        g_UdsStatus.curSessMode = sessMode;
+        if (g_UdsStatus.curSessMode == UDS_DCM_DEFAULT_SESSION)
+        {
+            Uds_DcmResetToDefaultSession();
+        }
+        else
+        {
+            Uds_ResetS3ServerTime();
+        }
+    }
+    Uds_SetSecurityLevel(UDS_DCM_SEC_LEV_NONE);
+}
+
+/*******************************************************
+  * Name    :Uds_DslDiagTimingsManager
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DslDiagTimingsManager(void)
+{
+    if (g_UdsTimeTick.s3Server == 0)
+    {
+        if (g_UdsStatus.curSessMode != UDS_DCM_DEFAULT_SESSION)
+        {
+            Uds_DcmResetToDefaultSession();
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :Uds_DslDiagRequestCheckMsg
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DslDiagRequestCheckMsg(void)
+{
+    if (Uds_RxUdsTpMsg(&g_UdsDslRxPdu.frame, &g_UdsDslRxPdu.id, g_UdsDslRxPdu.data, &g_UdsDslRxPdu.len) == FALSE)
+    {
+        return;
+    }
+
+    Uds_SetDiagRequestFlag(TRUE);
+    if (g_UdsTimeTick.diagActive != 0)
+    {
+        return;
+    }
+
+    if ((g_UdsDslRxPdu.data[0] == 0x3E) && (g_UdsDslRxPdu.data[1] == 0x80) && (g_UdsDslRxPdu.len == 2))
+    {
+        Uds_ResetS3ServerTime();
+        return;
+    }
+
+    if (g_UdsStatus.diagState != UDS_DSP_RESP_IDLE)
+    {
+        (void)UDS_DslNegativeResponse(g_UdsDslRxPdu.frame, g_UdsDslRxPdu.data[0], UDS_DCM_E_NRC_BRR);
+        return;
+    }
+    Uds_Copy(g_UdsDslRxPdu.sdu, g_UdsDslRxPdu.data, g_UdsDslRxPdu.len);
+    if (g_UdsDslRxPdu.id == g_UdsGenCfg.physAddrId)
+    {
+        g_UdsDslTxPdu.frame          = g_UdsDslRxPdu.frame;
+        g_UdsStatus.diagState        = UDS_DSP_RESP_REQUESTED;
+        g_UdsStatus.sid              = g_UdsDslRxPdu.sdu[0];
+        g_UdsStatus.context.frame    = g_UdsDslRxPdu.frame;
+        g_UdsStatus.context.reqType  = UDS_DSL_PHY_ADDR;
+        g_UdsStatus.context.p_rxData = &g_UdsDslRxPdu.sdu[1];
+        g_UdsStatus.context.rxLen    = g_UdsDslRxPdu.len - 1;
+        g_UdsStatus.progConCheck     = UDS_DCM_PROG_COND_CHK_IGNORE;
+        return;
+    }
+
+    if (g_UdsDslRxPdu.id == g_UdsGenCfg.funcAddrId)
+    {
+        g_UdsDslTxPdu.frame          = g_UdsDslRxPdu.frame;
+        g_UdsStatus.diagState        = UDS_DSP_RESP_REQUESTED;
+        g_UdsStatus.sid              = g_UdsDslRxPdu.sdu[0];
+        g_UdsStatus.context.frame    = g_UdsDslRxPdu.frame;
+        g_UdsStatus.context.reqType  = UDS_DSL_FUN_ADDR;
+        g_UdsStatus.context.p_rxData = &g_UdsDslRxPdu.sdu[1];
+        g_UdsStatus.context.rxLen    = g_UdsDslRxPdu.len - 1;
+        g_UdsStatus.progConCheck     = UDS_DCM_PROG_COND_CHK_IGNORE;
+        return;
+    }
+}
+
+/*******************************************************
+  * Name    :Uds_DsdOemPermissionCheck
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Uds_DsdOemPermissionCheck(void)
+{
+    return TRUE;
+}
+
+/*******************************************************
+  * Name    :Uds_DcmGetProgCondition
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Uds_DcmGetProgCondition(Uds_DcmProgCon_Type *p_progCon)
+{
+    uint8_t readData[UDS_BOOT_LEN]            = { 0x00 };
+    uint8_t bootValidValue[UDS_BOOT_LEN]      = UDS_BOOT_VALID_VALUE;
+    uint8_t bootClearValidValue[UDS_BOOT_LEN] = UDS_BOOT_CLEAR_VALID_VALUE;
+
+    if (Uds_NvmRead(UDS_BOOT_VALID_ADDR, readData, UDS_BOOT_LEN) == TRUE)
+    {
+        if (Uds_Compare(readData, bootValidValue, UDS_BOOT_LEN - 5) == TRUE)
+        {
+            p_progCon->reqType    = (Uds_DslAddr_Type)readData[4];
+            p_progCon->sid        = readData[5];
+            p_progCon->subFun     = readData[6];
+            p_progCon->supPosResp = (Bool)readData[7];
+            p_progCon->frame      = (Frame_Type)readData[8];
+            (void)Uds_NvmWrite(UDS_BOOT_VALID_ADDR, bootClearValidValue, UDS_BOOT_LEN);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*******************************************************
+  * Name    :Uds_DsdGetServiceCfgBySid
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static const Uds_DcmServCfg_Type *Uds_DsdGetServiceCfgBySid(uint8_t sid)
+{
+    uint8_t                    i         = 0;
+    const Uds_DcmServCfg_Type *p_servCfg = NULL;
+
+    for (i = 0; i < g_UdsServiceCfgListNum; i++)
+    {
+        if (sid == g_UdsServiceCfgList[i].sid)
+        {
+            p_servCfg = &g_UdsServiceCfgList[i];
+            break;
+        }
+    }
+    return p_servCfg;
+}
+
+/*******************************************************
+  * Name    :Uds_DsdMainServOemSupplierSpecCheck
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Uds_DsdMainServOemSupplierSpecCheck(Uds_modeRule_Type modeRule, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t index = 0;
+
+    index         = (uint8_t)modeRule;
+    if (index >= g_UdsModeRuleFunListNum)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return FALSE;
+    }
+    return g_UdsModeRuleFunList[index](p_errCode);
+}
+
+/*******************************************************
+  * Name    :Uds_DsdVerifyIfServiceAccepted
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Uds_DsdVerifyIfServiceAccepted(Uds_Status_Type *p_status, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    if (Uds_DsdOemPermissionCheck() == FALSE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return FALSE;
+    }
+
+    p_status->mainServCfgRef = Uds_DsdGetServiceCfgBySid(p_status->sid);
+    if (p_status->mainServCfgRef == NULL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SNS;
+        return FALSE;
+    }
+
+    if (((1 << p_status->context.reqType) & p_status->mainServCfgRef->supAddrWay) == FALSE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SNS;
+        return FALSE;
+    }
+
+    if (((1 << p_status->curSessMode) & p_status->mainServCfgRef->supSessMode) == FALSE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SNSIAS;
+        return FALSE;
+    }
+
+    if (p_status->curSecuLvl < p_status->mainServCfgRef->secuAccsLvl)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SAD;
+        return FALSE;
+    }
+
+    if (Uds_DsdMainServOemSupplierSpecCheck(p_status->mainServCfgRef->modeRule, p_errCode) == FALSE)
+    {
+        return FALSE;
+    }
+
+    if (p_status->mainServCfgRef->servHandleFun != NULL)
+    {
+        p_status->servHandleFun = p_status->mainServCfgRef->servHandleFun;
+    }
+    return TRUE;
+}
+
+/*******************************************************
+  * Name    :Uds_DsdCheckFomatAndVerifySubFun
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Bool Uds_DsdCheckFomatAndVerifySubFun(Uds_Status_Type *p_status, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t i      = 0;
+    uint8_t subFun = 0x00;
+
+    subFun         = (p_status->context.p_rxData[0] & UDS_DCM_SUBFUNCTION_VALUE_MASK);
+    if (p_status->context.rxLen < 1)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return FALSE;
+    }
+
+    if (p_status->mainServCfgRef->subServRef == NULL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_GR;
+        return FALSE;
+    }
+
+    for (i = 0; i < p_status->mainServCfgRef->subFunNum; i++)
+    {
+        if (subFun == p_status->mainServCfgRef->subServRef[i].sid)
+        {
+            break;
+        }
+    }
+    if (i >= p_status->mainServCfgRef->subFunNum)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SFNS;
+        return FALSE;
+    }
+
+    if (((1 << p_status->curSessMode) & p_status->mainServCfgRef->subServRef[i].supSessMode) == FALSE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SFNSIAS;
+        return FALSE;
+    }
+
+    if (p_status->curSecuLvl < p_status->mainServCfgRef->subServRef[i].secuAccsLvl)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SAD;
+        return FALSE;
+    }
+
+    p_status->context.subFun = subFun;
+    return TRUE;
+}
+
+/*******************************************************
+  * Name    :Uds_DsdAssembleRespByResult
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DsdAssembleRespByResult(Return_Type ret, Uds_DcmNegRespCode_Type errCode)
+{
+    switch (ret)
+    {
+        case RET_OK:
+            Uds_StopP2ServerTime();
+            Uds_ResetS3ServerTime();
+            g_UdsStatus.pendCnt                   = 0;
+            g_UdsStatus.context.finalRespToNotify = NULL;
+            g_UdsDslTxPdu.frame                   = g_UdsStatus.context.frame;
+            g_UdsDslTxPdu.sdu[0]                  = g_UdsStatus.sid + 0x40;
+            g_UdsDslTxPdu.len                     = g_UdsStatus.context.txLen + 1;
+            if (g_UdsStatus.context.supPosResp == FALSE)
+            {
+                (void)Uds_DslPositiveResponse(g_UdsDslTxPdu.frame, g_UdsDslTxPdu.sdu, g_UdsDslTxPdu.len);
+                g_UdsStatus.opStatus = UDS_DCM_POS_RESP_SENT;
+            }
+            else
+            {
+                g_UdsStatus.opStatus           = UDS_DCM_CANCEL;
+                g_UdsStatus.context.supPosResp = FALSE;
+            }
+            g_UdsStatus.diagState = UDS_DSP_RESP_IDLE;
+            break;
+        case RET_NOT_OK:
+            Uds_StopP2ServerTime();
+            Uds_ResetS3ServerTime();
+            (void)UDS_DslNegativeResponse(g_UdsDslTxPdu.frame, g_UdsStatus.sid, errCode);
+            g_UdsStatus.pendCnt                   = 0;
+            g_UdsStatus.context.finalRespToNotify = NULL;
+            g_UdsStatus.opStatus                  = UDS_DCM_NEG_RESP_SENT;
+            g_UdsStatus.diagState                 = UDS_DSP_RESP_IDLE;
+            break;
+        case RET_RCRRP:
+            if (g_UdsTimeTick.p2Server != 0)
+            {
+                g_UdsStatus.opStatus  = UDS_DCM_PENDING;
+                g_UdsStatus.diagState = UDS_DSP_WAIT_FINAL_RESP;
+                break;
+            }
+            if (++g_UdsStatus.pendCnt < UDS_DCM_DIAG_RESP_MAX_NUM)
+            {
+                Uds_ResetP2StartServerTime();
+                Uds_ResetS3ServerTime();
+                if (g_UdsStatus.context.supPosResp == FALSE)
+                {
+                    (void)UDS_DslNegativeResponse(g_UdsDslTxPdu.frame, g_UdsStatus.sid, UDS_DCM_E_NRC_RCRRP);
+                }
+                g_UdsStatus.opStatus  = UDS_DCM_FORCE_RCRRP_OK;
+                g_UdsStatus.diagState = UDS_DSP_WAIT_FINAL_RESP;
+                break;
+            }
+            if (g_UdsStatus.context.finalRespToNotify != NULL)
+            {
+                g_UdsStatus.context.finalRespToNotify(g_UdsStatus.opStatus);
+                g_UdsStatus.context.finalRespToNotify = NULL;
+            }
+            Uds_StopP2ServerTime();
+            Uds_ResetS3ServerTime();
+            g_UdsStatus.pendCnt = 0;
+            (void)UDS_DslNegativeResponse(g_UdsDslTxPdu.frame, g_UdsStatus.sid, g_UdsStatus.context.finalRespNrc);
+            g_UdsStatus.opStatus  = UDS_DCM_CANCEL;
+            g_UdsStatus.diagState = UDS_DSP_RESP_IDLE;
+            break;
+        case RET_PENDING:
+            g_UdsStatus.opStatus = UDS_DCM_PENDING;
+            break;
+        default:
+            break;
+    }
+}
+
+/*******************************************************
+  * Name    :Uds_DsdHandleUdsFinalResult
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DsdHandleUdsFinalResult(void)
+{
+    g_UdsDslTxPdu.len                     = 0;
+    g_UdsStatus.diagState                 = UDS_DSP_RESP_IDLE;
+    g_UdsStatus.opStatus                  = UDS_DCM_INITIAL;
+    g_UdsStatus.sid                       = 0x00;
+    g_UdsStatus.servHandleFun             = NULL;
+    g_UdsStatus.context.subFun            = 0x00;
+    g_UdsStatus.context.finalRespToNotify = NULL;
+}
+
+/*******************************************************
+  * Name    :Uds_DsdProcessContentResult
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static Return_Type Uds_DsdProcessContentResult(Uds_DcmNegRespCode_Type *p_errCode)
+{
+    if (g_UdsStatus.diagState == UDS_DSP_JUMP_DIAG_RESP)
+    {
+        g_UdsStatus.diagState = UDS_DSP_RESP_IDLE;
+        return RET_OK;
+    }
+
+    if (g_UdsStatus.diagState == UDS_DSP_RESP_REQUESTED)
+    {
+        Uds_ResetP2ServerTime();
+        Uds_ResetS3ServerTime();
+        g_UdsStatus.diagState                 = UDS_DSP_RESP_IDLE;
+        g_UdsStatus.opStatus                  = UDS_DCM_INITIAL;
+        g_UdsStatus.context.finalRespToNotify = NULL;
+        if (Uds_DsdVerifyIfServiceAccepted(&g_UdsStatus, p_errCode) == FALSE)
+        {
+            return RET_NOT_OK;
+        }
+
+        if ((g_UdsStatus.mainServCfgRef->subFunNum > 0) && (g_UdsStatus.sid != 0x31))
+        {
+            if (Uds_DsdCheckFomatAndVerifySubFun(&g_UdsStatus, p_errCode) == FALSE)
+            {
+                return RET_NOT_OK;
+            }
+        }
+        g_UdsStatus.context.supPosResp = g_UdsStatus.mainServCfgRef->supPosResp;
+        if (g_UdsStatus.mainServCfgRef->supPosResp == TRUE)
+        {
+            g_UdsStatus.context.supPosResp = ((g_UdsStatus.context.p_rxData[0] & UDS_DCM_SUPP_RESSPOS_BIT_MASK) != 0) ? TRUE : FALSE;
+        }
+        g_UdsStatus.context.p_txData = &g_UdsDslTxPdu.sdu[1];
+        g_UdsStatus.context.txLen    = 0;
+    }
+    if (g_UdsStatus.servHandleFun == NULL)
+    {
+        g_UdsStatus.opStatus = UDS_DCM_CANCEL;
+        return RET_OK;
+    }
+    return g_UdsStatus.servHandleFun(g_UdsStatus.opStatus, &g_UdsStatus.context, p_errCode);
+}
+
+/*******************************************************
+  * Name    :Uds_DsdCheckProgCon
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DsdCheckProgCon(void)
+{
+    static Uds_DcmProgCon_Type progCon;
+
+    if ((g_UdsTimeTick.diagActive != 0) || (g_UdsStatus.progConCheck != UDS_DCM_PROG_COND_CHK_WAIT))
+    {
+        return;
+    }
+
+    if (Uds_DcmGetProgCondition(&progCon) == TRUE)
+    {
+        if (g_UdsStatus.progConCheck != UDS_DCM_PROG_COND_CHK_IGNORE)
+        {
+            g_UdsStatus.context.frame       = progCon.frame;
+            g_UdsStatus.context.reqType     = progCon.reqType;
+            g_UdsStatus.context.supPosResp  = progCon.supPosResp;
+            g_UdsStatus.sid                 = progCon.sid;
+            g_UdsStatus.context.p_txData    = &g_UdsDslTxPdu.sdu[1];
+            g_UdsStatus.context.p_txData[0] = progCon.subFun;
+            if (g_UdsStatus.sid == UDS_DCM_SID_0X11)
+            {
+                g_UdsStatus.context.txLen = 1;
+                g_UdsStatus.opStatus      = UDS_DCM_PENDING;
+                g_UdsStatus.diagState     = UDS_DSP_JUMP_DIAG_RESP;
+            }
+        }
+    }
+    g_UdsStatus.progConCheck = UDS_DCM_PROG_COND_CHK_FINISH;
+}
+
+/*******************************************************
+  * Name    :Uds_DslMainFunction
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DslMainFunction(void)
+{
+    Uds_DslDiagTimingsManager();
+    Uds_DslDiagRequestCheckMsg();
+}
+
+/*******************************************************
+  * Name    :Uds_DsdMainFunction
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+static void Uds_DsdMainFunction(void)
+{
+    Return_Type                    ret     = RET_NOT_OK;
+    static Uds_DcmNegRespCode_Type errCode = UDS_DCM_E_POS_RESP;
+
+    if (g_UdsStatus.diagState == UDS_DSP_RESP_IDLE)
+    {
+        return;
+    }
+
+    ret = Uds_DsdProcessContentResult(&errCode);
+    if ((g_UdsStatus.opStatus == UDS_DCM_INITIAL)
+        || (g_UdsStatus.opStatus == UDS_DCM_PENDING)
+        || (g_UdsStatus.opStatus == UDS_DCM_FORCE_RCRRP_OK))
+    {
+        Uds_DsdAssembleRespByResult(ret, errCode);
+    }
+    else
+    {
+        Uds_DsdHandleUdsFinalResult();
+    }
+}
+
+/*******************************************************
+  * Name    :Uds_Init
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Uds_Init(void)
+{
+    Uds_IoCtrInit();
+    Uds_RoutineInit();
+    Uds_SecuAccsInit();
+    Uds_StopS3ServerTime();
+    Uds_StopP2ServerTime();
+    Uds_ResetDiagActiveTime();
+    Uds_SetSecurityLevel(UDS_DCM_SEC_LEV_NONE);
+    g_UdsStatus.diagState                 = UDS_DSP_RESP_IDLE;
+    g_UdsStatus.curSessMode               = UDS_DCM_DEFAULT_SESSION;
+    g_UdsStatus.sid                       = 0x00;
+    g_UdsStatus.opStatus                  = UDS_DCM_INITIAL;
+    g_UdsStatus.servHandleFun             = NULL;
+    g_UdsStatus.context.subFun            = 0x00;
+    g_UdsStatus.context.finalRespToNotify = NULL;
+    g_UdsStatus.progConCheck              = UDS_DCM_PROG_COND_CHK_WAIT;
+}
+
+/*******************************************************
+  * Name    :Uds_Main
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void Uds_Main(void)
+{
+    Uds_DsdCheckProgCon();
+    Uds_DslMainFunction();
+    Uds_DsdMainFunction();
+    Uds_DtcMainFunction();
+}
+

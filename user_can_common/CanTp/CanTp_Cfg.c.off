@@ -1,0 +1,10 @@
+/*******************************************************
+ * Name    :CanTp_Cfg.c
+ * Function:BLE CAN Transport Protocol — runtime config stub
+ *          No runtime configuration needed for classic CAN
+ *******************************************************/
+/*-------------include files--------------------------*/
+#include "CanTp_Cfg.h"
+
+/* All configuration is compile-time in CanTp_Cfg.h.
+ * This file reserved for future runtime needs. */

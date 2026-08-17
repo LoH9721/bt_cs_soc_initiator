@@ -1,0 +1,188 @@
+/*******************************************************
+  * Name    :IoCtr.c
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+/*-------------include file---------------------------*/
+#include "IoCtr_Cfg.h"
+/*-------------variable statement---------------------*/
+static IoCtr_MsgContext_Type g_IoCtrMsgContext;
+static uint16_t              g_IoCtrTimeTick[IOCTR_CFG_LIST_NUM] = { 0x00 };
+/*-------------function-------------------------------*/
+/*******************************************************
+  * Name    :IoCtr_Init
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void IoCtr_Init(void)
+{
+    uint8_t i = 0;
+
+    for (i = 0; i < IOCTR_CFG_LIST_NUM; i++)
+    {
+        g_IoCtrTimeTick[i] = 0;
+    }
+}
+
+/*******************************************************
+  * Name    :IoCtr_TimerCtrl
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void IoCtr_TimerCtrl(void)
+{
+    uint8_t                 i = 0;
+    IoCtr_MsgContext_Type   msgContext;
+    Uds_DcmNegRespCode_Type errCode = UDS_DCM_E_POS_RESP;
+
+    for (i = 0; i < IOCTR_CFG_LIST_NUM; i++)
+    {
+        if (g_IoCtrTimeTick[i] > 0)
+        {
+            if (--g_IoCtrTimeTick[i] == 0)
+            {
+                msgContext.ctrParm = IOCTR_RETURN_CONTROL_TO_ECU;
+                (void)g_IoCtrCfgList[i].dataHandleFun(UDS_DCM_CANCEL, &msgContext, &errCode);
+            }
+        }
+    }
+}
+
+/*******************************************************
+  * Name    :IoCtr_ReturnControlToEcu
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+void IoCtr_ReturnControlToEcu(void)
+{
+    uint8_t                 i = 0;
+    IoCtr_MsgContext_Type   msgContext;
+    Uds_DcmNegRespCode_Type errCode = UDS_DCM_E_POS_RESP;
+
+    for (i = 0; i < IOCTR_CFG_LIST_NUM; i++)
+    {
+        g_IoCtrTimeTick[i] = 0;
+        msgContext.ctrParm = IOCTR_RETURN_CONTROL_TO_ECU;
+        (void)g_IoCtrCfgList[i].dataHandleFun(UDS_DCM_CANCEL, &msgContext, &errCode);
+    }
+}
+
+/*******************************************************
+  * Name    :IoCtr_0x2FInputOutputControlByIdentifier
+  * Author  :WangHu
+  * Function:****
+  * Version :V1.0.0
+  * Data    :2024.1.2
+*******************************************************/
+Return_Type IoCtr_0x2FInputOutputControlByIdentifier(Uds_DcmOpStatus_Type opStatus, Uds_DcmMsgContext_Type *p_msgContext, Uds_DcmNegRespCode_Type *p_errCode)
+{
+    uint8_t              i         = 0;
+    uint8_t              len       = 0;
+    uint16_t             did       = 0;
+    IoCtr_ParmState_Type ioCtrParm = IOCTR_RETURN_CONTROL_TO_ECU;
+    Return_Type          ret       = RET_NOT_OK;
+
+    if (opStatus != UDS_DCM_INITIAL)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (p_msgContext->rxLen < 3)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    did        = (uint16_t)(p_msgContext->p_rxData[0] << 8);
+    did       += (uint16_t)(p_msgContext->p_rxData[1] << 0);
+    ioCtrParm  = (IoCtr_ParmState_Type)p_msgContext->p_rxData[2];
+    for (i = 0; i < IOCTR_CFG_LIST_NUM; i++)
+    {
+        if (did == g_IoCtrCfgList[i].did)
+        {
+            break;
+        }
+    }
+    if (i >= IOCTR_CFG_LIST_NUM)
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+
+    if ((ioCtrParm != IOCTR_RETURN_CONTROL_TO_ECU)
+        && ((ioCtrParm != IOCTR_RESET_TO_DEFAULT) || (g_IoCtrCfgList[i].supResetToDefault == FALSE))
+        && ((ioCtrParm != IOCTR_FREEZE_CURRENT_STATE) || (g_IoCtrCfgList[i].supFreezeCurrentState == FALSE))
+        && ((ioCtrParm != IOCTR_SHORT_TERM_ADJUST) || (g_IoCtrCfgList[i].supShortTermAdjust == FALSE)))
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+
+    if (((1 << IoCtr_GetCurrentSessionMode()) & g_IoCtrCfgList[i].supSessMode) == FALSE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_ROOR;
+        return RET_NOT_OK;
+    }
+
+    if (ioCtrParm == IOCTR_SHORT_TERM_ADJUST)
+    {
+        len  = g_IoCtrCfgList[i].maskLen;
+        len += g_IoCtrCfgList[i].stateLen + 3;
+    }
+    else
+    {
+        len = 3;
+    }
+
+    if (len != p_msgContext->rxLen)
+    {
+        *p_errCode = UDS_DCM_E_NRC_IMLOIF;
+        return RET_NOT_OK;
+    }
+
+    if (IoCtr_GetCurrentSecurityLevel() < g_IoCtrCfgList[i].secuAccsLvl)
+    {
+        *p_errCode = UDS_DCM_E_NRC_SAD;
+        return RET_NOT_OK;
+    }
+
+    if (IoCtr_CheckIfService0x2FConditionsNotCorrect(did) == TRUE)
+    {
+        *p_errCode = UDS_DCM_E_NRC_CNC;
+        return RET_NOT_OK;
+    }
+
+    if (ioCtrParm == IOCTR_SHORT_TERM_ADJUST)
+    {
+        g_IoCtrTimeTick[i] = g_IoCtrCfgList[i].ctrTime;
+    }
+    else
+    {
+        g_IoCtrTimeTick[i] = 0;
+    }
+
+    g_IoCtrMsgContext.ctrParm  = ioCtrParm;
+    g_IoCtrMsgContext.rxLen    = p_msgContext->rxLen - 3;
+    g_IoCtrMsgContext.txLen    = 0;
+    g_IoCtrMsgContext.p_rxData = &p_msgContext->p_rxData[3];
+    g_IoCtrMsgContext.p_txData = &p_msgContext->p_txData[3];
+    ret                        = g_IoCtrCfgList[i].dataHandleFun(opStatus, &g_IoCtrMsgContext, p_errCode);
+    if (ret == RET_OK)
+    {
+        p_msgContext->p_txData[0] = p_msgContext->p_rxData[0];
+        p_msgContext->p_txData[1] = p_msgContext->p_rxData[1];
+        p_msgContext->p_txData[2] = p_msgContext->p_rxData[2];
+        p_msgContext->txLen       = g_IoCtrMsgContext.txLen + 3;
+    }
+    return ret;
+}
+

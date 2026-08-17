@@ -1,0 +1,27 @@
+/*******************************************************
+ * Name    :Did_Cfg.c
+ * Function:DID config — BLE 4 DIDs (Communi-compatible struct)
+ *******************************************************/
+#include "Did_Cfg.h"
+
+static const uint8_t g_DidF189Buff[15] = "SW1.0.0        ";
+static const uint8_t g_DidF170Buff[4]  = "V1.0";
+static uint8_t g_DidF190Ram[17] = { 0x00 };
+static uint8_t g_DidF202Ram[8]  = { 0x00 };
+
+Bool Did_CheckIfService0x22ConditionsNotCorrect(uint16_t did) { (void)did; return FALSE; }
+Bool Did_CheckIfService0x2EConditionsNotCorrect(uint16_t did) { (void)did; return FALSE; }
+
+const Did_Cfg_Type g_DidCfgList[] =
+{
+    /* 0xF189: ECU SW version, 15B, read LV0, write not allowed, FLS, no addr */
+    { 0xF189, 15, DID_READ_LV0 | DID_WRITE_NOE,  DID_STORAGE_FLS, DID_ADDR_NOE, g_DidF189Buff, NULL },
+    /* 0xF190: VIN, 17B, read LV0, write LV1, RAM */
+    { 0xF190, 17, DID_READ_LV0 | DID_WRITE_LV1,  DID_STORAGE_RAM, DID_ADDR_NOE, NULL,          NULL },
+    /* 0xF202: Config, 8B, read LV0, write LV1, RAM */
+    { 0xF202,  8, DID_READ_LV0 | DID_WRITE_LV1,  DID_STORAGE_RAM, DID_ADDR_NOE, NULL,          NULL },
+    /* 0xF170: Bootloader ver, 4B, read LV0, write not allowed, FLS */
+    { 0xF170,  4, DID_READ_LV0 | DID_WRITE_NOE,  DID_STORAGE_FLS, DID_ADDR_NOE, g_DidF170Buff, NULL },
+};
+
+const uint8_t g_DidCfgListNum = sizeof(g_DidCfgList) / sizeof(g_DidCfgList[0]);

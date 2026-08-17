@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--Custom BLE GATT-->
+<gatt gatt_caching="true" generic_attribute_service="true" header="gatt_db.h" name="Custom BLE GATT" out="gatt_db.c" prefix="gattdb_">
+
+  <!--Generic Access-->
+  <service advertise="false" name="Generic Access" requirement="mandatory" sourceId="org.bluetooth.service.generic_access" type="primary" uuid="1800">
+    <informativeText>Abstract: The generic_access service contains generic information about the device. All available Characteristics are readonly. </informativeText>
+
+    <!--Appearance-->
+    <characteristic const="true" name="Appearance" sourceId="org.bluetooth.characteristic.gap.appearance" uuid="2A01">
+      <informativeText>Abstract: The external appearance of this device. The values are composed of a category (10-bits) and sub-categories (6-bits). </informativeText>
+      <value length="2" type="hex" variable_length="false">C108</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+  </service>
+
+  <!--Device Information-->
+  <service advertise="false" id="device_information" name="Device Information" requirement="mandatory" sourceId="org.bluetooth.service.device_information" type="primary" uuid="180A">
+    <informativeText>Abstract: The Device Information Service exposes manufacturer and/or vendor information about a device. Summary: This service exposes manufacturer information about a device. The Device Information Service is instantiated as a Primary Service. Only one instance of the Device Information Service is exposed on a device.</informativeText>
+
+    <!--Manufacturer Name String-->
+    <characteristic const="true" id="manufacturer_name_string" name="Manufacturer Name String" sourceId="org.bluetooth.characteristic.manufacturer_name_string" uuid="2A29">
+      <informativeText>Abstract: The value of this characteristic is a UTF-8 string representing the name of the manufacturer of the device.</informativeText>
+      <value length="12" type="utf-8" variable_length="false">Silicon Labs</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--Model Number String-->
+    <characteristic const="false" id="model_number_string" name="Model Number String" sourceId="org.bluetooth.characteristic.model_number_string" uuid="2A24">
+      <informativeText>Abstract: The value of this characteristic is a UTF-8 string representing the model number assigned by the device vendor.</informativeText>
+      <value length="10" type="utf-8" variable_length="true">00000000</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--Hardware Revision String-->
+    <characteristic const="false" id="hardware_revision_string" name="Hardware Revision String" sourceId="org.bluetooth.characteristic.hardware_revision_string" uuid="2A27">
+      <informativeText>Summary: The value of this characteristic is a UTF-8 string representing the hardware revision for the hardware within the device.</informativeText>
+      <value length="5" type="utf-8" variable_length="true">000</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--Firmware Revision String-->
+    <characteristic const="false" id="firmware_revision_string" name="Firmware Revision String" sourceId="org.bluetooth.characteristic.firmware_revision_string" uuid="2A26">
+      <informativeText>Summary: The value of this characteristic is a UTF-8 string representing the firmware revision for the firmware within the device.</informativeText>
+      <value length="8" type="utf-8" variable_length="true">0.0.0</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--System ID-->
+    <characteristic const="false" id="system_id" name="System ID" sourceId="org.bluetooth.characteristic.system_id" uuid="2A23">
+      <informativeText>Abstract: The SYSTEM ID characteristic consists of a structure with two fields. The first field are the LSOs and the second field contains the MSOs. This is a 64-bit structure which consists of a 40-bit manufacturer-defined identifier concatenated with a 24 bit unique Organizationally Unique Identifier (OUI). The OUI is issued by the IEEE Registration Authority (http://standards.ieee.org/regauth/index.html) and is required to be used in accordance with IEEE Standard 802-2001.6 while the least significant 40 bits are manufacturer defined. If System ID generated based on a Bluetooth Device Address, it is required to be done as follows. System ID and the Bluetooth Device Address have a very similar structure: a Bluetooth Device Address is 48 bits in length and consists of a 24 bit Company Assigned Identifier (manufacturer defined identifier) concatenated with a 24 bit Company Identifier (OUI). In order to encapsulate a Bluetooth Device Address as System ID, the Company Identifier is concatenated with 0xFFFE followed by the Company Assigned Identifier of the Bluetooth Address. For more guidelines related to EUI-64, refer to http://standards.ieee.org/develop/regauth/tut/eui64.pdf. Examples: If the system ID is based of a Bluetooth Device Address with a Company Identifier (OUI) is 0x123456 and the Company Assigned Identifier is 0x9ABCDE, then the System Identifier is required to be 0x123456FFFE9ABCDE.</informativeText>
+      <value length="8" type="hex" variable_length="false"/>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--PnP ID-->
+    <characteristic const="false" id="pnp_id" name="PnP ID" sourceId="org.bluetooth.characteristic.pnp_id" uuid="2A50">
+      <informativeText>Abstract: The PnP ID characteristic returns its vendor and product information. </informativeText>
+      <value length="7" type="hex" variable_length="false">02341201000001</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+  </service>
+
+  <!--Human Interface Device-->
+  <service advertise="false" id="human_interface_device" name="Human Interface Device" requirement="mandatory" sourceId="org.bluetooth.service.human_interface_device" type="primary" uuid="1812">
+    <informativeText>Abstract: The HID Service exposes characteristics required for a HID Device to transfer HID report descriptors and reports to a HID Host. This also exposes the characteristics for a HID Host to write to a Device. The Human Interface Device Service is instantiated as a Primary Service. </informativeText>
+
+    <!--Protocol Mode-->
+    <characteristic const="false" id="hid_protocol_mode" name="Protocol Mode" sourceId="org.bluetooth.characteristic.protocol_mode" uuid="2A4E">
+      <informativeText>Abstract: The Protocol Mode characteristic is used to expose the current protocol mode of the HID Service with which it is associated. The protocol mode value determines whether the HID Host and the HID Device uses the Boot or Report protocol. </informativeText>
+      <value length="1" type="hex" variable_length="false">01</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+        <write_no_response authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--Report Map-->
+    <characteristic const="false" id="hid_report_map" name="Report Map" sourceId="org.bluetooth.characteristic.report_map" uuid="2A4B">
+      <informativeText>Abstract: Only a single instance of this characteristic exists as part of the HID Service. The Report Map characteristic value contains the Report Map. The report map is the collection of HID descriptors that describe the HID device and its reports. </informativeText>
+      <value length="23" type="hex" variable_length="false">0600FF0901A101150026FF0075089508190129088102C0</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--HID Information-->
+    <characteristic const="false" id="hid_information" name="HID Information" sourceId="org.bluetooth.characteristic.hid_information" uuid="2A4A">
+      <informativeText>Abstract: The HID Information Characteristic returns the HID attributes when read. </informativeText>
+      <value length="4" type="hex" variable_length="false">11010002</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--HID Control Point-->
+    <characteristic const="false" id="hid_control_point" name="HID Control Point" sourceId="org.bluetooth.characteristic.hid_control_point" uuid="2A4C">
+      <informativeText>Abstract: The HID Control Point characteristic is a control point attribute that defines the following HID Commands when written: Suspend and Exit Suspend. </informativeText>
+      <value length="1" type="hex" variable_length="false">00</value>
+      <properties>
+        <write_no_response authenticated="true" bonded="false" encrypted="true"/>
+      </properties>
+    </characteristic>
+
+    <!--Report-->
+    <characteristic const="false" id="hid_report" name="Report" sourceId="org.bluetooth.characteristic.report" uuid="2A4D">
+      <informativeText>Abstract: The Report characteristic is used to exchange data between a HID Device and a HID Host. The Report characteristic value contains Input Report, Output Report or Feature Report data to be transferred between the HID Device and HID Host. </informativeText>
+      <value length="8" type="hex" variable_length="true">0000000000000000</value>
+      <properties>
+        <read authenticated="true" bonded="false" encrypted="true"/>
+        <notify authenticated="true" bonded="false" encrypted="true"/>
+      </properties>
+
+      <!--Report Reference-->
+      <descriptor const="false" discoverable="true" name="Report Reference" sourceId="org.bluetooth.descriptor.report_reference" uuid="2908">
+        <properties>
+          <read authenticated="false" bonded="false" encrypted="false"/>
+        </properties>
+        <value length="2" type="hex" variable_length="false">0001</value>
+      </descriptor>
+    </characteristic>
+  </service>
+
+  <!--Battery Service-->
+  <service advertise="false" id="battery_service" name="Battery Service" requirement="mandatory" sourceId="org.bluetooth.service.battery_service" type="primary" uuid="180F">
+    <informativeText>Abstract: The Battery Service exposes the state of a battery within a device. </informativeText>
+
+    <!--Battery Level-->
+    <characteristic const="false" id="batt_level" name="Battery Level" sourceId="org.bluetooth.characteristic.battery_level" uuid="2A19">
+      <informativeText>Abstract: The current charge level of a battery. 100% represents fully charged while 0% represents fully discharged. </informativeText>
+      <value length="1" type="hex" variable_length="false">64</value>
+      <properties>
+        <read authenticated="false" bonded="false" encrypted="false"/>
+        <notify authenticated="true" bonded="false" encrypted="true"/>
+      </properties>
+    </characteristic>
+  </service>
+
+  <!--Custom Service-->
+  <service advertise="false" name="Custom Service" requirement="mandatory" sourceId="" type="primary" uuid="A5A50001-1234-5678-ABCD-1234567890AB">
+
+    <!--Rx-->
+    <characteristic const="false" id="phone_rx" name="Rx" sourceId="" uuid="A5A50002-1234-5678-ABCD-1234567890AB">
+      <value length="255" type="hex" variable_length="true">00</value>
+      <properties>
+        <write_no_response authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+
+    <!--Tx-->
+    <characteristic const="false" id="phone_tx" name="Tx" sourceId="" uuid="A5A50003-1234-5678-ABCD-1234567890AB">
+      <value length="255" type="hex" variable_length="true">00</value>
+      <properties>
+        <notify authenticated="false" bonded="false" encrypted="false"/>
+      </properties>
+    </characteristic>
+  </service>
+</gatt>
