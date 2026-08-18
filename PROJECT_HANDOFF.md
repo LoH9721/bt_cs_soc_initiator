@@ -14,11 +14,11 @@
 
 下一项工作：
 
-`CR008-006/007 编译与实机补测 → 提交 Git → CR008-011 Release 安全整理`
+`CR008-006/007/009 剩余实机补测 → CR008-011 Release 安全整理`
 
-当前进度：CR008-001～005 已完成；CR008-008、010 已实机验证；CR008-009 编译与正向测试通过、负向项待补测；CR008-006、007 代码完成、尚未编译实机验证。
+当前进度：CR008-001～005 已完成；CR008-006 已完成取消、PREPARE 超时和错误 PIN 等负向实测，授权记录提交、清除和重启恢复仍需补测；CR008-007 已有系统蓝牙直接配对拒绝、观察窗口超时和 APP 场景实机日志，完整回归矩阵仍需补齐；CR008-008、010 已实机验证；CR008-009 编译与正向测试通过、负向项待补测。CR008-001～010 的代码和文档均已提交并推送到 GitHub 功能分支。
 
-开始前先只读检查本文件、`docs/CR008_PASSIVE_HID_HARDENING_PLAN.md`、`docs/CR008_CHANGE_RECORD.md` 和 Git 状态，不要直接修改，不要编译。若今天尚未提交，先按 `docs/GIT_COMMIT_GUIDE.md` 完成提交和推送。
+开始前先只读检查本文件、`docs/CR008_PASSIVE_HID_HARDENING_PLAN.md`、`docs/CR008_CHANGE_RECORD.md` 和 Git 状态，不要直接修改，不要编译。先核对剩余补测项和 CR008-011 的最小方案，等用户确认后再实施。
 
 ## 2. 协作约定
 
@@ -45,45 +45,24 @@
 
 ## 4. Git 与备份状态
 
-已提交基线：
+已提交记录：
 
 - `78fbe96 baseline: verified build before CR-008 passive HID hardening`
 - `8e2eb43 docs: establish CR-008 passive HID hardening plan`
+- `da29044 feat(cr008): passive HID hardening CR008-006~010`
+- `eb73355 docs(cr008): add project docs, change records and git guide`
 
-当前 HEAD：`8e2eb43`（CR008-001～010 的实现均在未提交的工作区）
+当前功能分支：`feature/cr008-passive-hid-hardening`。
 
-当前修改/新增文件（以 `git status --short` 为准）：
+远程仓库：`https://github.com/LoH9721/bt_cs_soc_initiator.git`。
 
-```text
-M  app.c
-M  config/app_config.h
-M  docs/CR008_PASSIVE_HID_HARDENING_PLAN.md
-M  key_connect/key_connect.c
-M  user_app_fun/user_app_fun.c
-M  user_app_fun/user_app_phone_peps.c
-M  user_eeprom/user_eeprom_items.def
-M  user_phone/data/phone_rang.c
-M  user_phone/data/phone_rang.h
-M  user_phone/data/phone_session.c
-M  user_phone/data/phone_session.h
-M  user_phone/data/phone_sm.c
-M  user_phone/data/phone_sm.h
-M  user_phone/data/phone_storage.c
-M  user_phone/data/phone_storage.h
-M  user_phone/link/phone_link.c
-M  user_phone/link/phone_link.h
-M  user_phone/phone_comm.c
-M  user_phone/phone_comm.h
-M  README.md
-?? docs/APP_BACKGROUND_GATT_CONNECTION_ANALYSIS.md
-?? docs/CR008_CHANGE_RECORD.md
-?? docs/GIT_COMMIT_GUIDE.md
-?? PROJECT_HANDOFF.md
+远程分支：`origin/feature/cr008-passive-hid-hardening`，已建立 upstream 并完成同步。交接文档更新前工作区为 clean；恢复工作时仍应以 `git status --short --branch` 和 `git log --oneline -5` 的实时结果为准。
+
+本机 Git 全局配置中存在 `https.proxy=https://127.0.0.1:7897`；代理未启动时普通 `git push` 会失败。已验证可用的临时绕过命令为：
+
+```bash
+git -c https.proxy= -c http.proxy= -c http.version=HTTP/1.1 push
 ```
-
-`git diff --check` 已通过。Git 的 LF/CRLF 提示是现有行尾转换警告，不是代码错误。
-
-远程仓库：尚未配置（`git remote -v` 为空）；GitHub 私有仓库建议页面不勾选 Add README / Add .gitignore，直接本地提交后推送。
 
 ## 5. 当前调试构建配置
 
@@ -177,7 +156,7 @@ APP 推荐策略：
 
 ## 9. CR008-006～010 已实施要点
 
-这些 CR 已按 `docs/CR008_CHANGE_RECORD.md` 实施，代码全部在工作区未提交。核心链路：
+这些 CR 已按 `docs/CR008_CHANGE_RECORD.md` 实施，并在提交 `da29044` 中提交到功能分支；相关文档在提交 `eb73355` 中补齐，均已推送到远程。核心链路：
 
 ```text
 CR008-006 授权 Bond 记录持久化（NVM 0x5520，28B+CRC16）
@@ -208,7 +187,7 @@ CR008-006 授权 Bond 记录持久化（NVM 0x5520，28B+CRC16）
 - 不要在 PREPARE 阶段删除旧 Bond；用户取消或 APP 异常会破坏原本可用的自动重连。
 - 不要直接修改生成的 GATT 数据库；当前 Appearance/Report Map 已确认正确。
 - 不要把 `APP_NO_CAN_PHONE_DEBUG=1` 的固件用于量产或真实车辆验收。
-- 当前工作区包含 CR008-001～010 的全部未提交修改，不要 reset、checkout 或覆盖文件；按 CR 提交前先按 `docs/GIT_COMMIT_GUIDE.md` 操作。
+- CR008-001～010 已提交并推送到功能分支；恢复工作时先确认当前分支和工作区，不要 reset、checkout 或覆盖用户修改。
 - CR008-009 的 1500ms 测距新鲜度是运行期判据，不改变 RSSI 算法和 300ms 轮询；首次区域直接为解锁区时不自动解锁，属既有策略。
 - CR008-010 自动落锁只接受授权 Passive L4 断开事件；未授权连接、L1 断开、Passive OFF 断开和 PREPARE/READY 主动切换都不触发闭锁。
 
@@ -225,7 +204,17 @@ D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR008_PASSIVE_H
 D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR008_CHANGE_RECORD.md
 D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\GIT_COMMIT_GUIDE.md
 
-当前 CR008-001～005 已完成；CR008-008、010 已实机验证；CR008-009 编译和正向通过、负向待补测；CR008-006、007 代码完成待编译实机验证。CR008-001～010 全部改动仍在工作区未提交，远程仓库未配置。
+当前分支为 feature/cr008-passive-hid-hardening。CR008-001～010 的代码和文档已经提交并推送到 origin/feature/cr008-passive-hid-hardening。最新已知提交包括 da29044（CR008-006～010 代码）和 eb73355（项目文档与 Git 指南）。
 
-先不要修改代码，也不要编译。先只读检查 Git 状态和当前进度，然后告诉我：剩余待补测项、建议的提交顺序和下一步 CR008-011（Release 禁止固定调试 PIN 和 PIN 日志）的最小方案。等我确认后再修改。一个 CR 一个 CR 来，我自己负责编译和 Git 提交。
+当前 CR008-001～005 已完成；CR008-006 已完成取消、PREPARE 超时和错误 PIN 等负向实测，但授权记录提交/清除/重启恢复仍需补测；CR008-007 已有系统蓝牙直接配对拒绝、观察窗口超时和 APP 场景实机日志，完整回归矩阵仍需补齐；CR008-008、010 已实机验证；CR008-009 编译和正向通过、负向待补测。
+
+先不要修改代码，也不要编译。先只读检查 Git 状态、上述文档以及 CR008-011 涉及的固定 PIN、PIN 日志、Release/Debug 配置代码，然后告诉我：
+1. 当前固定 PIN 的来源、设置和打印位置；
+2. CR008-011 的必要性与不修改的风险；
+3. 最小严格版本和完整版本的区别；
+4. 推荐方案、影响范围、与 CR008-001～010 的冲突检查；
+5. 预计修改的文件和函数位置；
+6. 每项可执行的编译与实机验证方法。
+
+等我确认方案后再修改。一个 CR 一个 CR 来，我自己负责编译和实机测试；正式修改后必须告诉我改了哪些文件和位置、如何前后对比测试。完成验证后按现有 Git 流程提交并推送，不修改串口调试接口。
 ```
