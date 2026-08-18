@@ -5303,16 +5303,19 @@ static void handle_passive_sensitivity_set(uint16_t seq,
   {
     uint8_t payload[64];
     uint16_t plen;
-    phone_tlv_t rsp_tlvs[2];
+    phone_tlv_t rsp_tlvs[3];
     uint8_t rcnt = 0U;
     uint8_t u8_r;
     uint8_t ec_buf[2] = {0, 0};
+    uint8_t sens_rsp = g_sess.passive_sensitivity;  /* CR008-013: 成功响应回显最新档位 */
 
     u8_r = PHONE_RESULT_OK;
     rsp_tlvs[rcnt].type = PHONE_TLV_RESULT; rsp_tlvs[rcnt].len = 1U;
     rsp_tlvs[rcnt].value = &u8_r; rcnt++;
     rsp_tlvs[rcnt].type = PHONE_TLV_ERROR_CODE; rsp_tlvs[rcnt].len = 2U;
     rsp_tlvs[rcnt].value = ec_buf; rcnt++;
+    rsp_tlvs[rcnt].type = PHONE_TLV_PASSIVE_SENSITIVITY; rsp_tlvs[rcnt].len = 1U;
+    rsp_tlvs[rcnt].value = &sens_rsp; rcnt++;
 
     if (phone_tlv_encode(rsp_tlvs, rcnt, payload, &plen, sizeof(payload)) == SL_STATUS_OK) {
       (void)send_encrypted_response(PHONE_CMD_PASSIVE_SENSITIVITY_SET, seq, payload, plen, false);

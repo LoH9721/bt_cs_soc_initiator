@@ -176,6 +176,17 @@
 - 影响：合法授权断开 5s 照常自动闭锁；5s 内恢复授权 L4 取消；未授权/L1/Passive OFF/主动 Pairing 断开不闭锁；不改变协议、NVM、测距、串口接口。
 - 验证：授权断开 `disconnect snapshot ... arm=Y` → 5s 后 `AUTO LOCK`；5s 内恢复取消；未授权断开 `arm=N` 且不闭锁。
 
+## CR008-013 0x65 灵敏度设置成功响应回显
+
+- 状态/日期：`CODED`，2026-08-18。
+- 原因：APP 策略要求发送灵敏度设置后，应答必须携带最新灵敏度；原成功响应只含 `result + errorCode`，APP 无法确认更新并提示“无法更新”。
+- 风险：锚点已应用档位但 APP 显示失败，双方状态不一致，三档功能实际不可用。
+- 改动：`handle_passive_sensitivity_set()` 成功响应新增 `TLV 0x28 passiveSensitivity`（U8），值为刚应用的档位；失败响应保持 `result + errorCode`，不回显旧值。
+- 涉及文件：`user_phone/data/phone_sm.c`
+- 影响：仅 `0x65` 成功响应；明文 9→13 字节、加密帧 38→42 字节，低于 MTU 限制；不改变命令字、TLV 定义、EEPROM 格式、三档值、PEPS、串口调试接口及 CR008-001～010 路径。
+- 验证：编译通过；APP 三档设置均收到 `result=0/errorCode=0/0x28=1|2|3` 且更新成功；未认证/非法值失败响应不带 `0x28`；`phone_zone` 档位一致；重启档位保持；后台重连、PEPS、自动落锁回归。
+- 当前：代码与文档已更新，等待用户编译与实机验证。
+
 ---
 
 ## 跨 CR 说明
