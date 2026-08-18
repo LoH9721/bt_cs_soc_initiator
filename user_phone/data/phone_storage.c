@@ -117,6 +117,7 @@ void phone_storage_dump_all(void)
   uint32_t bind_ver;
   uint8_t  bind_state;
   uint64_t app_counter;
+  phone_authorized_bond_t authorized_bond;
 
   sl_status_t did_sc  = phone_storage_get_device_id(did, sizeof(did));
   sl_status_t qid_sc  = phone_storage_get_qid(qid, sizeof(qid));
@@ -128,6 +129,7 @@ void phone_storage_dump_all(void)
   bind_ver             = phone_storage_get_bind_version();
   bind_state           = phone_storage_get_bind_state();
   app_counter          = phone_storage_get_app_counter();
+  sl_status_t auth_bond_sc = phone_storage_get_authorized_bond(&authorized_bond);
 
   USER_LOG_INFO("============================================" USER_LOG_NL);
   USER_LOG_INFO("📋 [STORAGE] 上电存储信息总览" USER_LOG_NL);
@@ -209,6 +211,21 @@ void phone_storage_dump_all(void)
                 (bind_state == PHONE_DEVICE_STATE_SERVICE_MODE) ? "SERVICE_MODE" : "?");
   USER_LOG_INFO("🔢 appCounter:   %s / %s [EEPROM]" USER_LOG_NL,
                 u64_hex_str(app_counter), u64_dec_str(app_counter));
+  if (auth_bond_sc == SL_STATUS_OK) {
+    USER_LOG_INFO("🔒 authorizedBond: type=%u addr(raw)=%02X:%02X:%02X:%02X:%02X:%02X bindVersion=%lu [EEPROM]"
+                  USER_LOG_NL,
+                  (unsigned)authorized_bond.identity_addr_type,
+                  (unsigned)authorized_bond.identity_address[0],
+                  (unsigned)authorized_bond.identity_address[1],
+                  (unsigned)authorized_bond.identity_address[2],
+                  (unsigned)authorized_bond.identity_address[3],
+                  (unsigned)authorized_bond.identity_address[4],
+                  (unsigned)authorized_bond.identity_address[5],
+                  (unsigned long)authorized_bond.bind_version);
+  } else {
+    USER_LOG_INFO("🔒 authorizedBond: (empty/invalid, sc=0x%04lX) [EEPROM]"
+                  USER_LOG_NL, (unsigned long)auth_bond_sc);
+  }
 
   USER_LOG_INFO("============================================" USER_LOG_NL);
 }
@@ -368,6 +385,88 @@ uint8_t phone_storage_get_bind_state(void)
 sl_status_t phone_storage_set_bind_state(uint8_t state)
 {
   return user_eeprom_write(EEPROM_PHONE_BIND_STATE, &state, 1U, NULL);
+}
+
+/* ========================================================================== */
+/* CR008-006 授权手机 Bond 身份关联 (固定 28 Byte, 显式序列化)                */
+/* ========================================================================== */
+
+#define PHONE_AUTH_BOND_FORMAT_VERSION       1U
+#define PHONE_AUTH_BOND_DATA_LEN            28U
+#define PHONE_AUTH_BOND_OFF_FORMAT           0U
+#define PHONE_AUTH_BOND_OFF_ADDR_TYPE        1U
+#define PHONE_AUTH_BOND_OFF_ADDRESS          2U
+#define PHONE_AUTH_BOND_OFF_APP_KEY_ID       8U
+#define PHONE_AUTH_BOND_OFF_BIND_VERSION    24U
+
+static bool authorized_bond_addr_type_valid(uint8_t addr_type)
+{
+  /* sl_bt_gap_public_address=0, sl_bt_gap_static_address=1 */
+  return addr_type <= 1U;
+}
+
+sl_status_t phone_storage_get_authorized_bond(phone_authorized_bond_t *record)
+{
+  uint8_t raw[PHONE_AUTH_BOND_DATA_LEN];
+  sl_status_t sc;
+
+  if (record == NULL) return SL_STATUS_INVALID_PARAMETER;
+
+  memset(record, 0, sizeof(*record));
+  sc = user_eeprom_read(EEPROM_PHONE_AUTHORIZED_BOND, raw, sizeof(raw));
+  if (sc != SL_STATUS_OK) return sc;
+
+  if (raw[PHONE_AUTH_BOND_OFF_FORMAT] != PHONE_AUTH_BOND_FORMAT_VERSION
+      || !authorized_bond_addr_type_valid(raw[PHONE_AUTH_BOND_OFF_ADDR_TYPE])) {
+    return SL_STATUS_NOT_FOUND;
+  }
+
+  record->identity_addr_type = raw[PHONE_AUTH_BOND_OFF_ADDR_TYPE];
+  memcpy(record->identity_address, &raw[PHONE_AUTH_BOND_OFF_ADDRESS], 6U);
+  memcpy(record->app_key_id, &raw[PHONE_AUTH_BOND_OFF_APP_KEY_ID], 16U);
+  record->bind_version = phone_frame_read_u32_be(
+      &raw[PHONE_AUTH_BOND_OFF_BIND_VERSION]);
+
+  if (record->bind_version == 0U) {
+    memset(record, 0, sizeof(*record));
+    return SL_STATUS_NOT_FOUND;
+  }
+
+  return SL_STATUS_OK;
+}
+
+sl_status_t phone_storage_set_authorized_bond_sync(
+    const phone_authorized_bond_t *record)
+{
+  uint8_t raw[PHONE_AUTH_BOND_DATA_LEN];
+
+  if (record == NULL
+      || !authorized_bond_addr_type_valid(record->identity_addr_type)
+      || record->bind_version == 0U) {
+    return SL_STATUS_INVALID_PARAMETER;
+  }
+
+  memset(raw, 0, sizeof(raw));
+  raw[PHONE_AUTH_BOND_OFF_FORMAT] = PHONE_AUTH_BOND_FORMAT_VERSION;
+  raw[PHONE_AUTH_BOND_OFF_ADDR_TYPE] = record->identity_addr_type;
+  memcpy(&raw[PHONE_AUTH_BOND_OFF_ADDRESS], record->identity_address, 6U);
+  memcpy(&raw[PHONE_AUTH_BOND_OFF_APP_KEY_ID], record->app_key_id, 16U);
+  phone_frame_write_u32_be(&raw[PHONE_AUTH_BOND_OFF_BIND_VERSION],
+                           record->bind_version);
+
+  return user_eeprom_write_sync(EEPROM_PHONE_AUTHORIZED_BOND,
+                                raw, sizeof(raw));
+}
+
+sl_status_t phone_storage_clear_authorized_bond(void)
+{
+  return user_eeprom_delete(EEPROM_PHONE_AUTHORIZED_BOND);
+}
+
+bool phone_storage_has_authorized_bond(void)
+{
+  phone_authorized_bond_t record;
+  return phone_storage_get_authorized_bond(&record) == SL_STATUS_OK;
 }
 
 /* ========================================================================== */

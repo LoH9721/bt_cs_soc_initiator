@@ -291,9 +291,10 @@ void key_connect_init(void)
 {
   sl_status_t sc;
 
-  sc = sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY,
+  sc = sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
+                          | SL_BT_SM_CONFIGURATION_BONDING_REQUEST_REQUIRED,
                           sl_bt_sm_io_capability_noinputnooutput);
-  USER_LOG_INFO("[KEY_CONN] sm_configure(SC_ONLY,NoIO) sc=0x%04lx" USER_LOG_NL,
+  USER_LOG_INFO("[KEY_CONN] sm_configure(SC_ONLY+BondConfirm,NoIO) sc=0x%04lx" USER_LOG_NL,
                 (unsigned long)sc);
 
   sc = sl_bt_sm_store_bonding_configuration(2, 0);
@@ -390,7 +391,8 @@ void key_connect_enter_pairing_mode(void)
 {
   uint64_t now = kc_now_ms();
 
-  sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY,
+  sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
+                     | SL_BT_SM_CONFIGURATION_BONDING_REQUEST_REQUIRED,
                      sl_bt_sm_io_capability_noinputnooutput);
   sl_bt_sm_set_bondable_mode(1);
   USER_LOG_INFO("[KEY_CONN] pair_mode: bondable=1" USER_LOG_NL);
@@ -556,16 +558,48 @@ void key_connect_on_bt_event(sl_bt_msg_t *evt)
     case sl_bt_evt_sm_confirm_passkey_id:
     {
       uint8_t conn = evt->data.evt_sm_confirm_passkey.connection;
-      USER_LOG_INFO("[KEY_CONN] SM confirm_passkey conn=%u -> auto accept" USER_LOG_NL, conn);
-      sl_bt_sm_passkey_confirm(conn, 1);
+      bool allow;
+      sl_status_t sc;
+      if (conn != kc_connected_conn) {
+        USER_LOG_INFO("[KEY_CONN] SM confirm_passkey ignore non-key conn=%u"
+                      USER_LOG_NL, conn);
+        break;
+      }
+      allow = kc_smp_from_pairing;
+      USER_LOG_INFO("[KEY_CONN] SM confirm_passkey conn=%u pairingMode=%s"
+                    USER_LOG_NL, conn, allow ? "Y" : "N");
+      sc = sl_bt_sm_passkey_confirm(conn, allow ? 1U : 0U);
+      USER_LOG_INFO("[KEY_CONN] SM confirm_passkey %s sc=0x%04lX"
+                    USER_LOG_NL, allow ? "ACCEPT" : "REJECT",
+                    (unsigned long)sc);
+      if (!allow || sc != SL_STATUS_OK) {
+        (void)ble_peer_manager_central_close_connection(conn);
+      }
       break;
     }
 
     case sl_bt_evt_sm_confirm_bonding_id:
     {
       uint8_t conn = evt->data.evt_sm_confirm_bonding.connection;
-      USER_LOG_INFO("[KEY_CONN] SM confirm_bonding conn=%u -> auto accept" USER_LOG_NL, conn);
-      sl_bt_sm_bonding_confirm(conn, 1);
+      uint8_t existing_bond = evt->data.evt_sm_confirm_bonding.bonding_handle;
+      bool allow;
+      sl_status_t sc;
+      if (conn != kc_connected_conn) {
+        USER_LOG_INFO("[KEY_CONN] SM confirm_bonding ignore non-key conn=%u"
+                      USER_LOG_NL, conn);
+        break;
+      }
+      allow = kc_smp_from_pairing;
+      USER_LOG_INFO("[KEY_CONN] SM confirm_bonding conn=%u existingBond=0x%02X pairingMode=%s"
+                    USER_LOG_NL, conn, existing_bond,
+                    allow ? "Y" : "N");
+      sc = sl_bt_sm_bonding_confirm(conn, allow ? 1U : 0U);
+      USER_LOG_INFO("[KEY_CONN] SM confirm_bonding %s sc=0x%04lX"
+                    USER_LOG_NL, allow ? "ACCEPT" : "REJECT",
+                    (unsigned long)sc);
+      if (!allow || sc != SL_STATUS_OK) {
+        (void)ble_peer_manager_central_close_connection(conn);
+      }
       break;
     }
 
@@ -573,6 +607,11 @@ void key_connect_on_bt_event(sl_bt_msg_t *evt)
     {
       uint8_t conn = evt->data.evt_sm_bonded.connection;
       uint8_t bond_h = evt->data.evt_sm_bonded.bonding;
+      if (conn != kc_connected_conn) {
+        USER_LOG_INFO("[KEY_CONN] SM BONDED ignore non-key conn=%u" USER_LOG_NL,
+                      conn);
+        break;
+      }
       kc_smp_increase_done = true;
       kc_smp_from_pairing = false;
       kc_sm_bonded = true;
@@ -585,6 +624,11 @@ void key_connect_on_bt_event(sl_bt_msg_t *evt)
     {
       uint8_t conn = evt->data.evt_sm_bonding_failed.connection;
       uint16_t reason = evt->data.evt_sm_bonding_failed.reason;
+      if (conn != kc_connected_conn) {
+        USER_LOG_INFO("[KEY_CONN] SM BONDING FAILED ignore non-key conn=%u"
+                      USER_LOG_NL, conn);
+        break;
+      }
       kc_smp_increase_done = true;
       kc_smp_from_pairing = false;
       kc_sm_bonded = false;

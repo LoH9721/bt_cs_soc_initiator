@@ -58,12 +58,23 @@ void phone_comm_process_action(void)
 
 void phone_comm_on_bt_event(sl_bt_msg_t *evt)
 {
-  /* link 先处理 boot/conn 事件 */
-  phone_link_on_bt_event(evt);
-
   if (evt == NULL) return;
 
+  /* CR008-008: 协议栈启动完成后先校验 Passive/授权 Bond，再由 link
+   * 构造首个广播，避免仅凭 passive_enabled 盲目加入 HID 特征。 */
+  if (SL_BT_MSG_ID(evt->header) == sl_bt_evt_system_boot_id) {
+    phone_sm_on_system_boot();
+  }
+
+  /* 其余事件仍由 link 先更新连接/安全状态，再通知 SM。 */
+  phone_link_on_bt_event(evt);
+
   switch (SL_BT_MSG_ID(evt->header)) {
+
+    case sl_bt_evt_connection_opened_id:
+      /* CR008-003: 新连接必须从空测距状态开始，禁止复用上一连接结果。 */
+      phone_rang_reset();
+      break;
 
     case sl_bt_evt_gatt_server_attribute_value_id: {
       const sl_bt_evt_gatt_server_attribute_value_t *d =
@@ -116,8 +127,16 @@ void phone_comm_on_bt_event(sl_bt_msg_t *evt)
       break;
 
     /* V1.2: BLE SM Pairing 事件 */
+    case sl_bt_evt_sm_confirm_bonding_id:
+      phone_sm_on_sm_confirm_bonding(
+          evt->data.evt_sm_confirm_bonding.connection,
+          evt->data.evt_sm_confirm_bonding.bonding_handle);
+      break;
+
     case sl_bt_evt_sm_bonded_id:
-      phone_sm_on_sm_bonded(evt->data.evt_sm_bonded.connection);
+      phone_sm_on_sm_bonded(evt->data.evt_sm_bonded.connection,
+                            evt->data.evt_sm_bonded.bonding,
+                            evt->data.evt_sm_bonded.security_mode);
       break;
 
     case sl_bt_evt_sm_bonding_failed_id:
@@ -147,6 +166,41 @@ sl_status_t phone_comm_send(const uint8_t *data, uint16_t len)
 uint8_t phone_comm_connection_handle_get(void)
 {
   return phone_link_conn_handle();
+}
+
+bool phone_comm_current_link_is_bonded(void)
+{
+  return phone_link_current_is_bonded();
+}
+
+bool phone_comm_current_link_is_encrypted(void)
+{
+  return phone_link_current_is_encrypted();
+}
+
+uint8_t phone_comm_current_bonding_handle_get(void)
+{
+  return phone_link_current_bonding_handle_get();
+}
+
+uint8_t phone_comm_current_security_mode_get(void)
+{
+  return phone_link_current_security_mode_get();
+}
+
+bool phone_comm_current_link_is_authorized_passive(void)
+{
+  uint8_t bonding = phone_link_current_bonding_handle_get();
+
+  return phone_sm_is_passive_enabled()
+         && phone_sm_is_authorized_bonding(bonding)
+         && phone_link_current_security_mode_get()
+              == sl_bt_connection_mode1_level4;
+}
+
+bool phone_comm_consume_authorized_passive_disconnect(void)
+{
+  return phone_sm_consume_authorized_passive_disconnect();
 }
 
 bool phone_comm_normal_actions_allowed(void)

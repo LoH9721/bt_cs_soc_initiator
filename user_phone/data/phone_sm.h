@@ -49,12 +49,13 @@ void phone_sm_process_action(void);
 /**
  * @brief 连接打开回调
  */
-void phone_sm_on_connection_opened(uint8_t conn_handle);
+void phone_sm_on_connection_opened(uint8_t conn_handle, uint8_t bonding);
 
 /**
  * @brief 连接关闭回调
  */
-void phone_sm_on_connection_closed(uint8_t conn_handle);
+void phone_sm_on_connection_closed(uint8_t conn_handle, uint8_t bonding,
+                                   uint8_t security_mode);
 
 /**
  * @brief MTU交换完成回调
@@ -92,6 +93,12 @@ bool phone_sm_is_notify_enabled(void);
  * @brief 查询无感钥匙是否已启用 (passive_enabled)
  */
 bool phone_sm_is_passive_enabled(void);
+
+/** 指定运行期 Bond handle 是否对应当前 APP 授权手机。 */
+bool phone_sm_is_authorized_bonding(uint8_t bonding);
+
+/** 读取并清除一次授权 Passive L4 链路断开事件。 */
+bool phone_sm_consume_authorized_passive_disconnect(void);
 
 /**
  * @brief 消耗一次自动解锁额度 (剩余>0 则 -1 并持久化, 返回 true; 否则 false)
@@ -140,7 +147,10 @@ void phone_sm_notify_vehicle_state(uint8_t lock, uint8_t ignition,
                                    uint16_t range, uint8_t doors);
 
 /* V1.2 SM 事件回调 (供 phone_comm.c 调用) */
-void phone_sm_on_sm_bonded(uint8_t connection);
+void phone_sm_on_sm_confirm_bonding(uint8_t connection,
+                                    uint8_t bonding_handle);
+void phone_sm_on_sm_bonded(uint8_t connection, uint8_t bonding,
+                           uint8_t security_mode);
 void phone_sm_on_sm_bonding_failed(uint8_t connection, uint16_t reason);
 
 #ifdef __cplusplus
@@ -201,8 +211,12 @@ void phone_sm_process_action(void);
 // BLE 事件
 // =============================================================================
 
-void phone_sm_on_connection_opened(uint8_t conn_handle);
-void phone_sm_on_connection_closed(uint8_t conn_handle);
+/** 协议栈启动后校验 Passive 配置与授权 Bond，再决定是否恢复 HID。 */
+void phone_sm_on_system_boot(void);
+
+void phone_sm_on_connection_opened(uint8_t conn_handle, uint8_t bonding);
+void phone_sm_on_connection_closed(uint8_t conn_handle, uint8_t bonding,
+                                   uint8_t security_mode);
 void phone_sm_on_mtu_exchanged(uint16_t mtu);
 
 /** Notify (CCCD) 已使能 */

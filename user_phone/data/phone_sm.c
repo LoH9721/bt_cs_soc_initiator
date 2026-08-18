@@ -22,6 +22,7 @@
 #include "user_phone/data/phone_session.h"
 #include "user_phone/data/phone_storage.h"
 #include "user_phone/phone_cfg.h"
+#include "app_config.h"
 #include "user_log_console.h"
 #include "user_can_common/CanManage/CanManage.h"
 #include "user_vin.h"
@@ -716,6 +717,46 @@ static uint16_t                g_vehicle_remaining_range = 0xFFFFU; /* UNKNOWN *
 static uint8_t                 g_vehicle_door_state = PHONE_DOOR_STATE_UNKNOWN;
 static bool                    g_auth_condition_met = true;  /* PEPS/车辆授权条件 (串口可控) */
 
+/* CR008-007: 未关联本地 Bond 的连接先进入受限观察窗口。
+ * 系统/HID 后台连接无法完成自定义 GATT 准入，合法 APP 则可通过
+ * Notify + BIND_HELLO/AUTH_CHALLENGE_REQ 接管连接。 */
+typedef enum {
+  PHONE_ADMISSION_DISABLED = 0,
+  PHONE_ADMISSION_WAIT_NOTIFY,
+  PHONE_ADMISSION_WAIT_APP,
+  PHONE_ADMISSION_APP_ALLOWED,
+  PHONE_ADMISSION_REJECTING
+} phone_admission_state_t;
+
+static struct {
+  phone_admission_state_t state;
+  uint64_t deadline_ms;
+} g_connection_admission;
+
+#if APP_NO_CAN_PHONE_DEBUG
+/* DBG-NOCAN-001: 无 CAN APP 调试只在安全检查点使用，不覆盖车辆状态上报。 */
+static const uint8_t g_no_can_phone_debug_vin[VIN_LENGTH] = {
+  'L', 'S', 'V', 'A', 'U', '2', 'A', '3', '8',
+  'N', '2', '1', '0', '0', '0', '0', '1'
+};
+
+static bool no_can_phone_debug_vin_allowed(void)
+{
+  uint8_t local_vin[VIN_LENGTH];
+  sl_status_t sc;
+
+  sc = user_vin_get_local_vin(local_vin);
+  if (sc == SL_STATUS_NOT_FOUND) {
+    /* 兼容旧调试板已绑定但尚未学习 VIN 的状态。 */
+    return true;
+  }
+  if (sc != SL_STATUS_OK) {
+    return false;
+  }
+  return memcmp(local_vin, g_no_can_phone_debug_vin, VIN_LENGTH) == 0;
+}
+#endif
+
 /* 延迟处理: 从 BLE 事件回调中缓存帧, 在主循环 phone_sm_process_action 中处理
  * 避免 BLE 事件处理阻塞 CAN 等实时任务 */
 static uint8_t  g_pending_rx_data[PHONE_MAX_ENCRYPTED_FRAME_LEN];
@@ -775,6 +816,93 @@ static struct {
     uint8_t  sig[64];        /* appSignature from TLV */
 } g_ecdh_rsp_defer;
 
+/* CR008-006: SM_BONDED 事件只缓存必要信息；Bond 详情校验和同步 NVM 写入
+ * 延迟到主循环，避免在 Bluetooth event callback 中阻塞 Flash。 */
+static struct {
+    bool     active;
+    uint8_t  connection;
+    uint8_t  bonding;
+    uint8_t  event_security_mode;
+    uint8_t  app_key_id[16];
+    uint32_t bind_version;
+} g_authorized_bond_commit;
+
+/* CR008-009: 当前运行期通过 CR006/008 严格校验的 Bond handle。
+ * handle 不持久化，只用于把当前链路映射回已持久化的授权身份。 */
+static uint8_t g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+static bool g_authorized_passive_disconnect_pending;
+
+static void connection_admission_reset(void)
+{
+  memset(&g_connection_admission, 0, sizeof(g_connection_admission));
+}
+
+static void connection_admission_disconnect(const char *reason)
+{
+  sl_status_t sc;
+  uint8_t connection;
+
+  if (!g_connected || g_sess.conn_handle == SL_BT_INVALID_CONNECTION_HANDLE) {
+    return;
+  }
+
+  connection = g_sess.conn_handle;
+  g_connection_admission.state = PHONE_ADMISSION_REJECTING;
+  g_connection_admission.deadline_ms = 0ULL;
+  sc = sl_bt_connection_close(connection);
+  USER_LOG_INFO("[SM] CR008-007 reject conn=%u reason=%s close_sc=0x%04lX"
+                USER_LOG_NL, (unsigned)connection, reason,
+                (unsigned long)sc);
+}
+
+static void connection_admission_reject_bond(uint8_t bonding,
+                                              const char *reason)
+{
+  sl_status_t delete_sc = SL_STATUS_INVALID_PARAMETER;
+
+  if (bonding != SL_BT_INVALID_BONDING_HANDLE) {
+    delete_sc = sl_bt_sm_delete_bonding(bonding);
+  }
+  USER_LOG_INFO("[SM] CR008-007 reject Bond=%u reason=%s delete_sc=0x%04lX"
+                USER_LOG_NL, (unsigned)bonding, reason,
+                (unsigned long)delete_sc);
+  connection_admission_disconnect(reason);
+}
+
+static void connection_admission_allow_app(const char *proof)
+{
+  if (g_connection_admission.state != PHONE_ADMISSION_WAIT_APP) {
+    return;
+  }
+
+  g_connection_admission.state = PHONE_ADMISSION_APP_ALLOWED;
+  g_connection_admission.deadline_ms = 0ULL;
+  USER_LOG_INFO("[SM] CR008-007 APP admitted conn=%u proof=%s" USER_LOG_NL,
+                (unsigned)g_sess.conn_handle, proof);
+}
+
+static void connection_admission_process_timeout(void)
+{
+  uint64_t now;
+
+  if (g_connection_admission.state != PHONE_ADMISSION_WAIT_NOTIFY
+      && g_connection_admission.state != PHONE_ADMISSION_WAIT_APP) {
+    return;
+  }
+
+  now = phone_session_now_ms();
+  if (g_connection_admission.deadline_ms == 0ULL
+      || now < g_connection_admission.deadline_ms) {
+    return;
+  }
+
+  if (g_connection_admission.state == PHONE_ADMISSION_WAIT_NOTIFY) {
+    connection_admission_disconnect("notify timeout");
+  } else {
+    connection_admission_disconnect("APP proof timeout");
+  }
+}
+
 /* ========================================================================== */
 /* 前向声明: 命令处理函数                                                      */
 /* ========================================================================== */
@@ -805,19 +933,269 @@ static void handle_passive_quota_refresh(uint16_t seq, const phone_tlv_t *tlvs, 
 /* V1.2: 配对上下文清理 (CANCEL/超时/bonded/bonding_failed 共用)              */
 /* ========================================================================== */
 
-/** 销毁配对窗口, 恢复默认 SM 配置 (SC+BR, NoIO, Non-Bondable) */
+/**
+ * CR008-001: PASSIVE_PAIR 生命周期的唯一完整清理出口。
+ * 超时、取消、Bond 成功/失败和非系统配对断连均必须调用本函数。
+ */
 static void pairing_context_destroy(void)
 {
   /* 恢复默认 SM 配置 + 关闭 Bondable (规范 23.2: 窗口结束立即恢复 Non-Bondable) */
   (void)sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
-                           | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED,
+                           | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED
+                           | SL_BT_SM_CONFIGURATION_BONDING_REQUEST_REQUIRED,
                            sl_bt_sm_io_capability_noinputnooutput);
   (void)sl_bt_sm_set_bondable_mode(0);
   g_sess.pairing_window_active = false;
   g_sess.pairing_awaiting_system = false;
+  g_sess.pairing_window_deadline_ms = 0ULL;
   hid_service_set_runtime_enabled(g_sess.passive_enabled);
   phone_crypto_memzero(g_sess.pairing_window_id, 8U);
+  phone_crypto_memzero(g_sess.pairing_app_key_id, 16U);
   g_sess.pairing_passkey = 0U;
+  g_sess.pairing_bind_version = 0U;
+}
+
+static void authorized_bond_force_passive_off(void)
+{
+  g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+  g_authorized_passive_disconnect_pending = false;
+  g_sess.passive_enabled = false;
+  g_sess.hid_runtime_enabled = false;
+  hid_service_set_runtime_enabled(false);
+  (void)phone_storage_set_passive_enabled(false);
+}
+
+typedef enum {
+  PHONE_AUTH_BOND_VALID = 0,
+  PHONE_AUTH_BOND_INVALID,
+  PHONE_AUTH_BOND_STACK_ERROR
+} phone_auth_bond_validation_t;
+
+/* CR008-008: Bond handle 仅作为本次启动的定位结果，不参与持久化身份。
+ * 持久身份仍由 Identity Address + APP appKeyId/bindVersion 共同确定。 */
+static phone_auth_bond_validation_t authorized_bond_validate(
+    uint8_t *matched_bonding, const char **reason)
+{
+  phone_authorized_bond_t record;
+  uint8_t current_app_key_id[16];
+  uint32_t current_bind_version;
+  uint8_t bonding_mask[4] = {0U, 0U, 0U, 0U};
+  uint32_t num_bondings = 0U;
+  size_t bonding_mask_len = 0U;
+  bool details_query_failed = false;
+  size_t i;
+  sl_status_t sc;
+
+  if (matched_bonding == NULL || reason == NULL) {
+    return PHONE_AUTH_BOND_INVALID;
+  }
+
+  *matched_bonding = SL_BT_INVALID_BONDING_HANDLE;
+  *reason = "authorized Bond record missing/invalid";
+  memset(&record, 0, sizeof(record));
+  memset(current_app_key_id, 0, sizeof(current_app_key_id));
+
+  sc = phone_storage_get_authorized_bond(&record);
+  if (sc != SL_STATUS_OK) {
+    return PHONE_AUTH_BOND_INVALID;
+  }
+
+  sc = sl_bt_sm_get_bonding_handles(0U, &num_bondings,
+                                     sizeof(bonding_mask),
+                                     &bonding_mask_len, bonding_mask);
+  if (sc != SL_STATUS_OK) {
+    *reason = "Bond table query failed";
+    return PHONE_AUTH_BOND_STACK_ERROR;
+  }
+
+  for (i = 0U; i < bonding_mask_len && i < sizeof(bonding_mask); i++) {
+    uint8_t bit;
+    for (bit = 0U; bit < 8U; bit++) {
+      uint32_t bonding;
+      bd_addr address;
+      uint8_t address_type = 0xFFU;
+      uint8_t security_mode = sl_bt_connection_mode1_level1;
+      uint8_t key_size = 0U;
+
+      if ((bonding_mask[i] & (uint8_t)(1U << bit)) == 0U) continue;
+
+      bonding = (uint32_t)(i * 8U) + (uint32_t)bit;
+      memset(&address, 0, sizeof(address));
+      sc = sl_bt_sm_get_bonding_details(bonding, &address, &address_type,
+                                         &security_mode, &key_size);
+      if (sc != SL_STATUS_OK) {
+        details_query_failed = true;
+        continue;
+      }
+
+      if (address_type != record.identity_addr_type
+          || memcmp(address.addr, record.identity_address,
+                    sizeof(record.identity_address)) != 0) {
+        continue;
+      }
+
+      *matched_bonding = (uint8_t)bonding;
+      if (security_mode != sl_bt_connection_mode1_level4 || key_size != 16U) {
+        *reason = "authorized Bond security invalid";
+        return PHONE_AUTH_BOND_INVALID;
+      }
+
+      if (phone_storage_get_bind_state() != PHONE_DEVICE_STATE_BOUND
+          || !phone_storage_is_bound()) {
+        *reason = "APP binding anchor missing";
+        return PHONE_AUTH_BOND_INVALID;
+      }
+
+      sc = phone_storage_get_app_key_id(current_app_key_id);
+      current_bind_version = phone_storage_get_bind_version();
+      if (sc != SL_STATUS_OK || current_bind_version == 0U
+          || memcmp(current_app_key_id, record.app_key_id,
+                    sizeof(current_app_key_id)) != 0
+          || current_bind_version != record.bind_version) {
+        *reason = "APP binding identity mismatch";
+        return PHONE_AUTH_BOND_INVALID;
+      }
+
+      *reason = "authorized Bond valid";
+      return PHONE_AUTH_BOND_VALID;
+    }
+  }
+
+  if (details_query_failed) {
+    *reason = "Bond details query failed";
+    return PHONE_AUTH_BOND_STACK_ERROR;
+  }
+
+  (void)num_bondings;
+  *reason = "authorized Bond identity not found";
+  return PHONE_AUTH_BOND_INVALID;
+}
+
+static void authorized_bond_disable_invalid(
+    phone_auth_bond_validation_t validation, uint8_t matched_bonding,
+    bool delete_matched_bond, const char *reason, const char *source)
+{
+  sl_status_t passive_sc;
+  sl_status_t clear_sc = SL_STATUS_OK;
+  sl_status_t delete_sc = SL_STATUS_OK;
+  bool clear_attempted = false;
+  bool delete_attempted = false;
+
+  g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+  g_authorized_passive_disconnect_pending = false;
+  g_sess.passive_enabled = false;
+  g_sess.hid_runtime_enabled = false;
+  hid_service_set_runtime_enabled(false);
+  passive_sc = phone_storage_set_passive_enabled(false);
+
+  /* 协议栈查询异常可能是暂态问题，不销毁原授权关系；确定的逻辑不一致
+   * 才清授权记录，并且只删除能够按 Identity Address 精确命中的 Bond。 */
+  if (validation == PHONE_AUTH_BOND_INVALID) {
+    clear_attempted = true;
+    clear_sc = phone_storage_clear_authorized_bond();
+    if (delete_matched_bond
+        && matched_bonding != SL_BT_INVALID_BONDING_HANDLE) {
+      delete_attempted = true;
+      delete_sc = sl_bt_sm_delete_bonding(matched_bonding);
+    }
+  }
+
+  USER_LOG_ERROR("[SM] CR008-008 %s FAIL reason=%s passiveOff=0x%04lX clearAuth=%s(0x%04lX) deleteBond=%s(0x%04lX)"
+                 USER_LOG_NL, source, reason,
+                 (unsigned long)passive_sc,
+                 clear_attempted ? "DONE" : "SKIP",
+                 (unsigned long)clear_sc,
+                 delete_attempted ? "DONE" : "SKIP",
+                 (unsigned long)delete_sc);
+}
+
+static void authorized_bond_commit_clear_pending(void)
+{
+  phone_crypto_memzero(g_authorized_bond_commit.app_key_id, 16U);
+  memset(&g_authorized_bond_commit, 0, sizeof(g_authorized_bond_commit));
+}
+
+static void authorized_bond_commit_process(void)
+{
+  phone_authorized_bond_t record;
+  bd_addr address;
+  uint8_t address_type = 0xFFU;
+  uint8_t details_security_mode = sl_bt_connection_mode1_level1;
+  uint8_t key_size = 0U;
+  uint8_t current_app_key_id[16];
+  uint32_t current_bind_version;
+  sl_status_t sc;
+
+  if (!g_authorized_bond_commit.active) return;
+
+  memset(&record, 0, sizeof(record));
+  memset(&address, 0, sizeof(address));
+  memset(current_app_key_id, 0, sizeof(current_app_key_id));
+
+  sc = sl_bt_sm_get_bonding_details(g_authorized_bond_commit.bonding,
+                                     &address, &address_type,
+                                     &details_security_mode, &key_size);
+  USER_LOG_INFO("[SM] CR008-006 bonding details bond=%u sc=0x%04lX type=%u sec=L%u keySize=%u"
+                USER_LOG_NL,
+                (unsigned)g_authorized_bond_commit.bonding,
+                (unsigned long)sc, (unsigned)address_type,
+                (unsigned)details_security_mode + 1U, (unsigned)key_size);
+
+  if (sc != SL_STATUS_OK
+      || g_authorized_bond_commit.event_security_mode
+          != sl_bt_connection_mode1_level4
+      || details_security_mode != sl_bt_connection_mode1_level4
+      || key_size != 16U
+      || address_type > 1U) {
+    USER_LOG_ERROR("[SM] CR008-006 Bond details invalid, authorization rejected"
+                   USER_LOG_NL);
+    goto fail;
+  }
+
+  sc = phone_storage_get_app_key_id(current_app_key_id);
+  current_bind_version = phone_storage_get_bind_version();
+  if (sc != SL_STATUS_OK
+      || current_bind_version == 0U
+      || memcmp(current_app_key_id, g_authorized_bond_commit.app_key_id, 16U) != 0
+      || current_bind_version != g_authorized_bond_commit.bind_version) {
+    USER_LOG_ERROR("[SM] CR008-006 APP binding changed during Pairing, authorization rejected"
+                   USER_LOG_NL);
+    goto fail;
+  }
+
+  record.identity_addr_type = address_type;
+  memcpy(record.identity_address, address.addr, sizeof(record.identity_address));
+  memcpy(record.app_key_id, g_authorized_bond_commit.app_key_id,
+         sizeof(record.app_key_id));
+  record.bind_version = g_authorized_bond_commit.bind_version;
+
+  sc = phone_storage_set_authorized_bond_sync(&record);
+  if (sc != SL_STATUS_OK) {
+    USER_LOG_ERROR("[SM] CR008-006 authorized Bond NVM write failed sc=0x%04lX"
+                   USER_LOG_NL, (unsigned long)sc);
+    goto fail;
+  }
+
+  g_authorized_bonding_handle = g_authorized_bond_commit.bonding;
+  USER_LOG_INFO("[SM] CR008-006 authorized Bond committed bond=%u addrType=%u bindVersion=%lu"
+                USER_LOG_NL,
+                (unsigned)g_authorized_bond_commit.bonding,
+                (unsigned)record.identity_addr_type,
+                (unsigned long)record.bind_version);
+  authorized_bond_commit_clear_pending();
+  return;
+
+fail:
+  {
+    sl_status_t clear_sc = phone_storage_clear_authorized_bond();
+    sl_status_t delete_sc = sl_bt_sm_delete_bonding(
+        g_authorized_bond_commit.bonding);
+    USER_LOG_ERROR("[SM] CR008-006 rollback clearNvm=0x%04lX deleteBond=0x%04lX"
+                   USER_LOG_NL,
+                   (unsigned long)clear_sc, (unsigned long)delete_sc);
+  }
+  authorized_bond_force_passive_off();
+  authorized_bond_commit_clear_pending();
 }
 
 /* ========================================================================== */
@@ -1885,7 +2263,10 @@ static void handle_bind_hello(uint16_t seq,
     USER_LOG_INFO("[SM] BIND_HELLO OK sessionId=%02X%02X%02X%02X..." USER_LOG_NL,
                   (unsigned)g_sess.bind_session_id[0], (unsigned)g_sess.bind_session_id[1],
                   (unsigned)g_sess.bind_session_id[2], (unsigned)g_sess.bind_session_id[3]);
-    (void)send_plain_response(PHONE_CMD_BIND_HELLO, seq, payload, plen);
+    if (send_plain_response(PHONE_CMD_BIND_HELLO, seq, payload, plen)
+        == SL_STATUS_OK) {
+      connection_admission_allow_app("BIND_HELLO");
+    }
   }
 }
 
@@ -2048,14 +2429,21 @@ static void handle_bind_window_query(uint16_t seq,
   }
 
   /* PEPS/车辆条件 (串口/外部可控, 默认满足) */
+#if !APP_NO_CAN_PHONE_DEBUG
   if (!g_auth_condition_met) {
     USER_LOG_INFO("[SM] BIND_WINDOW_QUERY AUTH_COND_NOT_MET (g_auth_condition_met=false)" USER_LOG_NL);
     send_error_response(PHONE_CMD_BIND_WINDOW_QUERY, seq, PHONE_RESULT_FAIL,
                         PHONE_ERR_AUTH_COND_NOT_MET, false, true, true);
     return;
   }
+#endif
 
   /* V1.2: 读取候选 VIN (PEPS/点火条件通过后, 设置 authorization 前) */
+#if APP_NO_CAN_PHONE_DEBUG
+  /* DBG-NOCAN-001: 首次绑定尚无本地 VIN，使用指定调试 VIN 作为候选并由原子注册写入。 */
+  memcpy(g_sess.candidate_vin, g_no_can_phone_debug_vin, VIN_LENGTH);
+  USER_LOG_INFO("[SM] BIND_WINDOW_QUERY NO-CAN debug candidate VIN ready" USER_LOG_NL);
+#else
   if (!vehicle_state_is_vin_available()) {
     USER_LOG_INFO("[SM] BIND_WINDOW_QUERY VIN_NOT_AVAILABLE" USER_LOG_NL);
     send_error_response(PHONE_CMD_BIND_WINDOW_QUERY, seq, PHONE_RESULT_FAIL,
@@ -2069,9 +2457,10 @@ static void handle_bind_window_query(uint16_t seq,
                         PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, true);
     return;
   }
-  g_sess.candidate_vin_valid = true;
   USER_LOG_INFO("[SM] BIND_WINDOW_QUERY candidate_vin=%.17s" USER_LOG_NL,
                 (const char *)g_sess.candidate_vin);
+#endif
+  g_sess.candidate_vin_valid = true;
 
   phone_session_set_authorized(&g_sess);
 
@@ -2195,6 +2584,15 @@ static void handle_register_app_key(uint16_t seq,
     return;
   }
   {
+#if APP_NO_CAN_PHONE_DEBUG
+    if (memcmp(g_sess.candidate_vin, g_no_can_phone_debug_vin, VIN_LENGTH) != 0) {
+      USER_LOG_INFO("[SM] REGISTER_APP_KEY NO-CAN debug candidate VIN invalid" USER_LOG_NL);
+      g_sess.candidate_vin_valid = false;
+      send_error_response(PHONE_CMD_REGISTER_APP_KEY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, false);
+      return;
+    }
+#else
     uint8_t cur_vin[17];
     if (!vehicle_state_is_vin_available()
         || vehicle_state_get_vin(cur_vin) != SL_STATUS_OK
@@ -2205,6 +2603,7 @@ static void handle_register_app_key(uint16_t seq,
                           PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, false);
       return;
     }
+#endif
   }
 
   /* 原子写入 (V1.2: 含 VIN, atomic_register 内部调用 user_vin_learn 更新 RAM) */
@@ -2670,20 +3069,31 @@ static void handle_rebind_request(uint16_t seq,
   }
 
   /* PEPS/车辆条件检查 (串口/外部可控) */
+#if !APP_NO_CAN_PHONE_DEBUG
   if (!g_auth_condition_met) {
     USER_LOG_INFO("[SM] REBIND_REQUEST AUTH_COND_NOT_MET (g_auth_condition_met=false)" USER_LOG_NL);
     send_error_response(PHONE_CMD_REBIND_REQUEST, seq, PHONE_RESULT_FAIL,
                         PHONE_ERR_AUTH_COND_NOT_MET, false, true, true);
     return;
   }
+#endif
 
   /* V1.2: VIN 一致性校验 — 换绑前确认当前 VIN 与已保存 VIN 一致 */
+#if APP_NO_CAN_PHONE_DEBUG
+  if (!no_can_phone_debug_vin_allowed()) {
+    USER_LOG_INFO("[SM] REBIND_REQUEST NO-CAN debug local VIN mismatch" USER_LOG_NL);
+    send_error_response(PHONE_CMD_REBIND_REQUEST, seq, PHONE_RESULT_FAIL,
+                        PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, true);
+    return;
+  }
+#else
   if (!vehicle_state_is_vin_available()) {
     USER_LOG_INFO("[SM] REBIND_REQUEST VIN_NOT_AVAILABLE" USER_LOG_NL);
     send_error_response(PHONE_CMD_REBIND_REQUEST, seq, PHONE_RESULT_FAIL,
                         PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, true);
     return;
   }
+#endif
   if (user_vin_get_abstract_status() != VIN_ASSOC_NORMAL) {
     USER_LOG_INFO("[SM] REBIND_REQUEST VIN_MISMATCH status=%u" USER_LOG_NL,
                   (unsigned)user_vin_get_abstract_status());
@@ -2793,6 +3203,14 @@ static void handle_rebind_register_key(uint16_t seq,
   }
 
   /* V1.2: VIN 再次确认 — 提交前确认 VIN 状态正常 (换绑窗口期间 VIN 可能变化) */
+#if APP_NO_CAN_PHONE_DEBUG
+  if (!no_can_phone_debug_vin_allowed()) {
+    USER_LOG_INFO("[SM] REBIND_REGISTER_KEY NO-CAN debug local VIN mismatch" USER_LOG_NL);
+    send_error_response(PHONE_CMD_REBIND_REGISTER_KEY, seq, PHONE_RESULT_FAIL,
+                        PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, false);
+    return;
+  }
+#else
   if (!vehicle_state_is_vin_available()
       || user_vin_get_abstract_status() != VIN_ASSOC_NORMAL) {
     USER_LOG_INFO("[SM] REBIND_REGISTER_KEY VIN_CHECK_FAIL avail=%d status=%u" USER_LOG_NL,
@@ -2802,6 +3220,7 @@ static void handle_rebind_register_key(uint16_t seq,
                         PHONE_ERR_VEHICLE_ASSOCIATION_FAILED, false, true, false);
     return;
   }
+#endif
 
   /* 提取新公钥 */
   tlv = phone_tlv_get(tlvs, tlv_count, PHONE_TLV_APP_PUBLIC_KEY);
@@ -2890,8 +3309,16 @@ static void handle_rebind_register_key(uint16_t seq,
   g_sess.passive_quota_remaining = PHONE_PASSIVE_QUOTA_DEFAULT;
   (void)phone_storage_set_passive_quota(g_sess.passive_quota_remaining);
 
-  (void)sl_bt_sm_delete_bondings();
-  USER_LOG_INFO("[SM] REBIND: cleared passive state + deleted old bonds (23.10)" USER_LOG_NL);
+  {
+    sl_status_t auth_clear_sc = phone_storage_clear_authorized_bond();
+    sl_status_t bond_delete_sc = sl_bt_sm_delete_bondings();
+    g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+    g_authorized_passive_disconnect_pending = false;
+    USER_LOG_INFO("[SM] REBIND: passive OFF, authorizedBondClear=0x%04lX bondDelete=0x%04lX"
+                  USER_LOG_NL,
+                  (unsigned long)auth_clear_sc,
+                  (unsigned long)bond_delete_sc);
+  }
 }
 
 /* ========================================================================== */
@@ -3231,11 +3658,16 @@ static void phone_sm_deferred_ecdsa_poll(void)
 
       /* V1.2: 控制前 VIN 校验 — 安全校验通过后、向 VIU 下发前
        * VIN 无效/不一致 → STATE_NOT_ALLOWED (0x0002), 不计入安全失败, 不下发控制 */
+#if APP_NO_CAN_PHONE_DEBUG
+      if (!no_can_phone_debug_vin_allowed()) {
+        USER_LOG_INFO("[SM] CTRL_COMMAND NO-CAN debug local VIN mismatch — 拒绝下发控制" USER_LOG_NL);
+#else
       if (!vehicle_state_is_vin_available()
           || user_vin_get_abstract_status() != VIN_ASSOC_NORMAL) {
         USER_LOG_INFO("[SM] CTRL_COMMAND VIN_CHECK_FAIL avail=%d status=%u — 拒绝下发控制" USER_LOG_NL,
                       (int)vehicle_state_is_vin_available(),
                       (unsigned)user_vin_get_abstract_status());
+#endif
         /* VIN 失败不计入安全失败 (§14: VIN校验返回的STATE_NOT_ALLOWED不计入) */
         {
           uint8_t vin_fail_payload[64];
@@ -3496,8 +3928,10 @@ static void phone_sm_process_auth_deferred(void)
   rsp_tlvs[rcnt].type = PHONE_TLV_BIND_STATE; rsp_tlvs[rcnt].len = 1U; rsp_tlvs[rcnt].value = &u8_b; rcnt++;
 
   if (phone_tlv_encode(rsp_tlvs, rcnt, payload, &plen, sizeof(payload)) == SL_STATUS_OK) {
-    (void)send_plain_response(PHONE_CMD_AUTH_CHALLENGE_REQ, g_auth_defer.seq,
-                               payload, plen);
+    if (send_plain_response(PHONE_CMD_AUTH_CHALLENGE_REQ, g_auth_defer.seq,
+                            payload, plen) == SL_STATUS_OK) {
+      connection_admission_allow_app("AUTH_CHALLENGE_REQ");
+    }
   }
 }
 
@@ -3642,15 +4076,70 @@ void phone_sm_init(phone_sm_send_fn_t send_fn, phone_sm_disconnect_fn_t disc_fn)
   g_auth_defer.active           = false;
   g_ecdh_rsp_defer.active       = false;
   g_ctrl_challenge_defer.active = false;
+  memset(&g_authorized_bond_commit, 0, sizeof(g_authorized_bond_commit));
+  g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+  g_authorized_passive_disconnect_pending = false;
+  connection_admission_reset();
+#if APP_NO_CAN_PHONE_DEBUG
+  USER_LOG_INFO("[DEBUG] APP_NO_CAN_PHONE_DEBUG enabled - NOT FOR PRODUCTION" USER_LOG_NL);
+#endif
+}
+
+void phone_sm_on_system_boot(void)
+{
+  bool passive_enabled = false;
+  uint8_t matched_bonding = SL_BT_INVALID_BONDING_HANDLE;
+  const char *reason = "passive config read failed";
+  phone_auth_bond_validation_t validation;
+  sl_status_t sc;
+
+  /* 首个广播前始终从关闭态开始；只有完整校验通过才打开 HID runtime。 */
+  g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+  g_sess.passive_enabled = false;
+  g_sess.hid_runtime_enabled = false;
+  hid_service_set_runtime_enabled(false);
+
+  sc = phone_storage_get_passive_enabled(&passive_enabled);
+  if (sc != SL_STATUS_OK) {
+    authorized_bond_disable_invalid(PHONE_AUTH_BOND_STACK_ERROR,
+                                    matched_bonding, true, reason,
+                                    "startup restore");
+    return;
+  }
+
+  if (!passive_enabled) {
+    USER_LOG_INFO("[SM] CR008-008 startup restore SKIP passive=OFF"
+                  USER_LOG_NL);
+    return;
+  }
+
+  validation = authorized_bond_validate(&matched_bonding, &reason);
+  if (validation != PHONE_AUTH_BOND_VALID) {
+    authorized_bond_disable_invalid(validation, matched_bonding, true, reason,
+                                    "startup restore");
+    return;
+  }
+
+  g_sess.passive_enabled = true;
+  g_sess.hid_runtime_enabled = true;
+  g_authorized_bonding_handle = matched_bonding;
+  hid_service_set_runtime_enabled(true);
+  USER_LOG_INFO("[SM] CR008-008 startup restore PASS bond=%u L4 keySize=16"
+                USER_LOG_NL, (unsigned)matched_bonding);
 }
 
 void phone_sm_process_action(void)
 {
   phone_session_process_timeouts(&g_sess);
 
-  /* V1.2: 配对窗口超时检查 (系统 Pairing 60s 未完成 → 恢复 Non-Bondable) */
+  /* CR008-006: 在主循环中完成 Bond 详情校验和同步 NVM 提交。 */
+  authorized_bond_commit_process();
+
+  /* CR008-001: Pairing 超时必须由 phone_sm 统一处理。
+   * phone_session 不得提前清除 active, 否则会跳过 Bondable、SM 和 HID 恢复。 */
   if (g_sess.pairing_window_active
-      && phone_session_now_ms() > g_sess.pairing_window_deadline_ms) {
+      && g_sess.pairing_window_deadline_ms > 0ULL
+      && phone_session_now_ms() >= g_sess.pairing_window_deadline_ms) {
     USER_LOG_INFO("[SM] pairing window timeout → destroy" USER_LOG_NL);
     pairing_context_destroy();
   }
@@ -3684,9 +4173,27 @@ void phone_sm_process_action(void)
     process_received_frame(g_pending_rx_data, len);
   }
 
-  /* SILENT 恢复后更新 bindState */
-  if (!g_sess.is_silent && g_sess.device_state != phone_storage_get_bind_state()) {
-    g_sess.device_state = phone_storage_get_bind_state();
+  /* CR008-007: 先处理已经到达的 APP 帧，再判定观察窗口超时，避免边界时刻
+   * 已入队的合法 BIND/AUTH 被超时逻辑抢先断开。 */
+  connection_admission_process_timeout();
+
+  /* SILENT 恢复后更新 bindState。外部解绑使锚点变为 UNBOUND 时，运行期
+   * 授权 handle 和 Passive 状态也必须同步失效，避免残留 RAM 授权。 */
+  if (!g_sess.is_silent) {
+    uint8_t stored_bind_state = phone_storage_get_bind_state();
+    if (g_sess.device_state != stored_bind_state) {
+      g_sess.device_state = stored_bind_state;
+      if (stored_bind_state == PHONE_DEVICE_STATE_UNBOUND) {
+        g_authorized_bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+        g_authorized_passive_disconnect_pending = false;
+        g_sess.passive_enabled = false;
+        g_sess.hid_runtime_enabled = false;
+        hid_service_set_runtime_enabled(false);
+        (void)phone_storage_set_passive_enabled(false);
+        USER_LOG_INFO("[SM] CR008-009 APP anchor removed → Passive authorization cleared"
+                      USER_LOG_NL);
+      }
+    }
   }
 
   /* 状态稳定延迟后发送 STATE_CHANGED_EVENT (协议 §13: 100~300ms, V1.2 扩展为5字段) */
@@ -3735,19 +4242,102 @@ void phone_sm_process_action(void)
   }
 }
 
-void phone_sm_on_connection_opened(uint8_t conn_handle)
+void phone_sm_on_connection_opened(uint8_t conn_handle, uint8_t bonding)
 {
+  sl_status_t delete_sc;
+
   g_sess.conn_handle = conn_handle;
   g_connected = true;
   g_notify_enabled = false;
-  USER_LOG_INFO("[SM] CONNECTED conn=%u state=0x%02X" USER_LOG_NL,
-                (unsigned)conn_handle, (unsigned)g_sess.device_state);
+  connection_admission_reset();
+
+  USER_LOG_INFO("[SM] CONNECTED conn=%u state=0x%02X bond=0x%02X" USER_LOG_NL,
+                (unsigned)conn_handle, (unsigned)g_sess.device_state,
+                (unsigned)bonding);
+
+  /* READY 后的系统 Pairing 连接由已授权窗口约束，不进入 APP 观察窗口。 */
+  if (g_sess.pairing_window_active && g_sess.pairing_awaiting_system) {
+    USER_LOG_INFO("[SM] CR008-007 authorized system Pairing connection"
+                  USER_LOG_NL);
+    return;
+  }
+
+  /* UNBIND 后理论上不应再出现有效本地 Bond。若删除曾失败，拒绝残留 Bond，
+   * 防止旧手机直接恢复为可信连接。 */
+  if (bonding != SL_BT_INVALID_BONDING_HANDLE
+      && g_sess.device_state == PHONE_DEVICE_STATE_UNBOUND) {
+    delete_sc = sl_bt_sm_delete_bonding(bonding);
+    USER_LOG_INFO("[SM] CR008-007 stale Bond after UNBIND bond=%u delete_sc=0x%04lX"
+                  USER_LOG_NL, (unsigned)bonding, (unsigned long)delete_sc);
+    connection_admission_disconnect("stale Bond after UNBIND");
+    return;
+  }
+
+  if (bonding == SL_BT_INVALID_BONDING_HANDLE) {
+    g_connection_admission.state = PHONE_ADMISSION_WAIT_NOTIFY;
+    g_connection_admission.deadline_ms = phone_session_now_ms()
+                                           + (uint64_t)PHONE_TIMEOUT_NOTIFY_ENABLE_MS;
+    USER_LOG_INFO("[SM] CR008-007 probation conn=%u wait_notify=%ums"
+                  USER_LOG_NL, (unsigned)conn_handle,
+                  (unsigned)PHONE_TIMEOUT_NOTIFY_ENABLE_MS);
+  }
 }
 
-void phone_sm_on_connection_closed(uint8_t conn_handle)
+void phone_sm_on_connection_closed(uint8_t conn_handle, uint8_t bonding,
+                                   uint8_t security_mode)
 {
+  bool pairing_switch;
+  bool authorized_link;
+  sl_status_t sc;
+
   USER_LOG_INFO("[SM] DISCONNECTED conn=%u" USER_LOG_NL, (unsigned)conn_handle);
-  (void)conn_handle;
+
+  /* CR008-010: 调用发生在 phone_link 清空 Bond/L4 事实之前。
+   * 系统 Pairing 的主动切换不属于“手机离车”断开，不允许启动自动落锁。 */
+  pairing_switch = g_sess.pairing_window_active
+                   && g_sess.pairing_awaiting_system;
+  authorized_link = g_sess.passive_enabled
+                    && phone_storage_get_bind_state() == PHONE_DEVICE_STATE_BOUND
+                    && phone_storage_is_bound()
+                    && phone_storage_has_authorized_bond()
+                    && phone_sm_is_authorized_bonding(bonding)
+                    && security_mode == sl_bt_connection_mode1_level4;
+  if (authorized_link && !pairing_switch) {
+    g_authorized_passive_disconnect_pending = true;
+  }
+  USER_LOG_INFO("[SM] CR008-010 disconnect snapshot conn=%u bond=0x%02X sec=L%u authorized=%s pairingSwitch=%s arm=%s"
+                USER_LOG_NL,
+                (unsigned)conn_handle, (unsigned)bonding,
+                (unsigned)security_mode + 1U,
+                authorized_link ? "Y" : "N",
+                pairing_switch ? "Y" : "N",
+                (authorized_link && !pairing_switch) ? "Y" : "N");
+
+  /* CR008-005: READY 已通过业务认证并成功回复 APP 后，当前断连是进入
+   * Android 系统 Pairing 的切换点。必须先清除 BG24 侧旧 Bond，再恢复
+   * 配对广播，避免手机已忽略 Bond 而本端仍使用旧 LTK 导致 0x1205。 */
+  if (g_sess.pairing_window_active && g_sess.pairing_awaiting_system) {
+    sc = sl_bt_sm_delete_bondings();
+    USER_LOG_INFO("[SM] CR008-005 stale bonds delete before system pairing sc=0x%04lX"
+                  USER_LOG_NL, (unsigned long)sc);
+    if (sc != SL_STATUS_OK) {
+      USER_LOG_ERROR("[SM] CR008-005 stale bonds delete failed, pairing aborted"
+                     USER_LOG_NL);
+      pairing_context_destroy();
+    } else {
+      /* CR008-006: 旧 Bond 已删除后，旧授权关联也必须先清除。
+       * 清除失败时不得继续开放新系统 Pairing，避免残留授权记录。 */
+      sc = phone_storage_clear_authorized_bond();
+      USER_LOG_INFO("[SM] CR008-006 old authorized Bond clear sc=0x%04lX"
+                    USER_LOG_NL, (unsigned long)sc);
+      authorized_bond_force_passive_off();
+      if (sc != SL_STATUS_OK) {
+        USER_LOG_ERROR("[SM] CR008-006 authorization clear failed, pairing aborted"
+                       USER_LOG_NL);
+        pairing_context_destroy();
+      }
+    }
+  }
 
   /* V1.2 23.2: APP断连 → 立即销毁配对窗口 + 恢复 Non-Bondable;
    *             但等待系统 Pairing 时断连不销毁 (系统复连后继续配对) */
@@ -3764,6 +4354,7 @@ void phone_sm_on_connection_closed(uint8_t conn_handle)
   g_auth_defer.active           = false;
   g_ecdh_rsp_defer.active       = false;
   g_ctrl_challenge_defer.active = false;
+  connection_admission_reset();
 }
 
 void phone_sm_on_mtu_exchanged(uint16_t mtu)
@@ -3776,6 +4367,15 @@ void phone_sm_on_notify_enabled(void)
 {
   g_notify_enabled = true;
   USER_LOG_INFO("[SM] NOTIFY_ENABLED" USER_LOG_NL);
+
+  if (g_connection_admission.state == PHONE_ADMISSION_WAIT_NOTIFY) {
+    g_connection_admission.state = PHONE_ADMISSION_WAIT_APP;
+    g_connection_admission.deadline_ms = phone_session_now_ms()
+                                           + (uint64_t)PHONE_TIMEOUT_BIND_HELLO_MS;
+    USER_LOG_INFO("[SM] CR008-007 APP candidate conn=%u proof_timeout=%ums"
+                  USER_LOG_NL, (unsigned)g_sess.conn_handle,
+                  (unsigned)PHONE_TIMEOUT_BIND_HELLO_MS);
+  }
 }
 
 void phone_sm_on_receive(const uint8_t *data, uint16_t len)
@@ -3813,6 +4413,19 @@ bool phone_sm_is_notify_enabled(void)
 bool phone_sm_is_passive_enabled(void)
 {
   return g_sess.passive_enabled;
+}
+
+bool phone_sm_is_authorized_bonding(uint8_t bonding)
+{
+  return bonding != SL_BT_INVALID_BONDING_HANDLE
+         && bonding == g_authorized_bonding_handle;
+}
+
+bool phone_sm_consume_authorized_passive_disconnect(void)
+{
+  bool pending = g_authorized_passive_disconnect_pending;
+  g_authorized_passive_disconnect_pending = false;
+  return pending;
 }
 
 bool phone_sm_consume_passive_quota(void)
@@ -3915,6 +4528,10 @@ void phone_sm_set_auth_condition(bool met)
 static void handle_passive_pair_prepare(uint16_t seq,
                                         const phone_tlv_t *tlvs, uint8_t tlv_count)
 {
+  uint8_t authorized_app_key_id[16];
+  uint32_t authorized_bind_version;
+  sl_status_t sc;
+
   (void)tlvs; (void)tlv_count;  /* Payload 为空 */
 
   USER_LOG_INFO("[SM] PASSIVE_PAIR_PREPARE seq=%u" USER_LOG_NL, (unsigned)seq);
@@ -3948,8 +4565,25 @@ static void handle_passive_pair_prepare(uint16_t seq,
     return;
   }
 
+  /* CR008-006: Pairing 窗口必须绑定到当前 AUTH session 实际验证过的 APP。
+   * 不允许在认证后发生换绑，再沿用旧 session 为新业务身份发起 Pairing。 */
+  memset(authorized_app_key_id, 0, sizeof(authorized_app_key_id));
+  sc = phone_storage_get_app_key_id(authorized_app_key_id);
+  authorized_bind_version = phone_storage_get_bind_version();
+  if (sc != SL_STATUS_OK || authorized_bind_version == 0U) {
+    send_error_response(PHONE_CMD_PASSIVE_PAIR_PREPARE, seq, PHONE_RESULT_FAIL,
+                        PHONE_ERR_INTERNAL_ERROR, true, true, false);
+    return;
+  }
+  if (memcmp(authorized_app_key_id, g_sess.authenticated_app_key_id, 16U) != 0) {
+    USER_LOG_ERROR("[SM] CR008-006 authenticated APP identity is stale"
+                   USER_LOG_NL);
+    send_error_response(PHONE_CMD_PASSIVE_PAIR_PREPARE, seq, PHONE_RESULT_FAIL,
+                        PHONE_ERR_STATE_NOT_ALLOWED, true, true, false);
+    return;
+  }
+
   /* 生成 8 字节随机 pairingWindowId */
-  sl_status_t sc;
   sc = phone_crypto_get_random(g_sess.pairing_window_id, 8U);
   if (sc != SL_STATUS_OK) {
     send_error_response(PHONE_CMD_PASSIVE_PAIR_PREPARE, seq, PHONE_RESULT_FAIL,
@@ -3982,6 +4616,8 @@ static void handle_passive_pair_prepare(uint16_t seq,
   /* 启动 30 秒准备期 (Bondable 保持 ON, 安全由 IO 能力控制) */
   g_sess.pairing_window_deadline_ms = phone_session_now_ms()
                                     + (uint64_t)PHONE_TIMEOUT_PAIR_PREPARE_MS;
+  memcpy(g_sess.pairing_app_key_id, authorized_app_key_id, 16U);
+  g_sess.pairing_bind_version = authorized_bind_version;
   g_sess.pairing_window_active = true;
 
   /* 构造成功响应: result + errorCode + windowId + passkey + remainSec=30 */
@@ -4078,7 +4714,85 @@ static void handle_passive_pair_ready(uint16_t seq,
     }
   }
 
-  /* 先发送成功响应 (协议要求: APP 先收到确认, 再开启 BLE Pairing) */
+  /* CR008-006: READY 前再次确认业务绑定身份未在窗口期间变化。 */
+  {
+    uint8_t current_app_key_id[16];
+    uint32_t current_bind_version;
+    sl_status_t sc;
+
+    memset(current_app_key_id, 0, sizeof(current_app_key_id));
+    sc = phone_storage_get_app_key_id(current_app_key_id);
+    current_bind_version = phone_storage_get_bind_version();
+    if (sc != SL_STATUS_OK
+        || current_bind_version == 0U
+        || memcmp(current_app_key_id, g_sess.pairing_app_key_id, 16U) != 0
+        || current_bind_version != g_sess.pairing_bind_version) {
+      USER_LOG_ERROR("[SM] CR008-006 APP binding changed before PAIR_READY"
+                     USER_LOG_NL);
+      pairing_context_destroy();
+      send_error_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_STATE_NOT_ALLOWED, true, true, false);
+      return;
+    }
+  }
+
+  /* CR008-002: 成功响应前必须完成全部 SM 配置，避免 APP 收到“假成功”。 */
+  {
+    sl_status_t sc;
+    uint64_t ts;
+
+    USER_LOG_INFO("[SM] === PAIR_READY SM config start ===" USER_LOG_NL);
+
+    ts = phone_session_now_ms();
+    sc = sl_bt_sm_store_bonding_configuration(2, 0);
+    USER_LOG_INFO("[SM]   [%lums] sm_store_bonds(2) sc=0x%04lx" USER_LOG_NL,
+                  (unsigned long)ts, (unsigned long)sc);
+    if (sc != SL_STATUS_OK) {
+      pairing_context_destroy();
+      send_error_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_INTERNAL_ERROR, true, true, false);
+      return;
+    }
+
+    ts = phone_session_now_ms();
+    sc = sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
+                            | SL_BT_SM_CONFIGURATION_MITM_REQUIRED
+                            | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED
+                            | SL_BT_SM_CONFIGURATION_BONDING_REQUEST_REQUIRED,
+                             sl_bt_sm_io_capability_displayonly);
+    USER_LOG_INFO("[SM]   [%lums] sm_configure(SC+MITM+BR+BondConfirm+DisplayOnly) sc=0x%04lx" USER_LOG_NL,
+                  (unsigned long)ts, (unsigned long)sc);
+    if (sc != SL_STATUS_OK) {
+      pairing_context_destroy();
+      send_error_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_INTERNAL_ERROR, true, true, false);
+      return;
+    }
+
+    ts = phone_session_now_ms();
+    sc = sl_bt_sm_set_passkey((int32_t)g_sess.pairing_passkey);
+    USER_LOG_INFO("[SM]   [%lums] sm_set_passkey(******) sc=0x%04lx" USER_LOG_NL,
+                  (unsigned long)ts, (unsigned long)sc);
+    if (sc != SL_STATUS_OK) {
+      pairing_context_destroy();
+      send_error_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_INTERNAL_ERROR, true, true, false);
+      return;
+    }
+
+    ts = phone_session_now_ms();
+    sc = sl_bt_sm_set_bondable_mode(1);
+    USER_LOG_INFO("[SM]   [%lums] sm_set_bondable(1) sc=0x%04lx" USER_LOG_NL,
+                  (unsigned long)ts, (unsigned long)sc);
+    if (sc != SL_STATUS_OK) {
+      pairing_context_destroy();
+      send_error_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_INTERNAL_ERROR, true, true, false);
+      return;
+    }
+  }
+
+  /* SM 已就绪后发送成功响应，再断开 APP 连接进入系统 Pairing。 */
   {
     uint8_t payload[64];
     uint16_t plen;
@@ -4104,49 +4818,40 @@ static void handle_passive_pair_ready(uint16_t seq,
     rsp_tlvs[rcnt].type = PHONE_TLV_REMAIN_SEC; rsp_tlvs[rcnt].len = 2U;
     rsp_tlvs[rcnt].value = remain_buf; rcnt++;
 
-    if (phone_tlv_encode(rsp_tlvs, rcnt, payload, &plen, sizeof(payload)) == SL_STATUS_OK) {
-      (void)send_encrypted_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, payload, plen, false);
+    if (phone_tlv_encode(rsp_tlvs, rcnt, payload, &plen, sizeof(payload)) != SL_STATUS_OK) {
+      USER_LOG_INFO("[SM] PAIR_READY response encode failed, rollback" USER_LOG_NL);
+      pairing_context_destroy();
+      send_error_response(PHONE_CMD_PASSIVE_PAIR_READY, seq, PHONE_RESULT_FAIL,
+                          PHONE_ERR_INTERNAL_ERROR, true, true, false);
+      return;
+    }
+
+    if (send_encrypted_response(PHONE_CMD_PASSIVE_PAIR_READY, seq,
+                                payload, plen, false) != SL_STATUS_OK) {
+      USER_LOG_INFO("[SM] PAIR_READY response send failed, rollback" USER_LOG_NL);
+      pairing_context_destroy();
+      return;
     }
   }
 
-  /* 响应发送完成后: 开启 BLE Pairing 窗口 */
+  /* 响应发送完成后: 断开 APP，开启 BLE 系统 Pairing 窗口。 */
   {
     sl_status_t sc;
     uint64_t ts;
 
-    USER_LOG_INFO("[SM] === PAIR_READY SM config start ===" USER_LOG_NL);
-
-    ts = phone_session_now_ms();
-    sc = sl_bt_sm_store_bonding_configuration(2, 0);
-    USER_LOG_INFO("[SM]   [%lums] sm_store_bonds(2) sc=0x%04lx" USER_LOG_NL,
-                  (unsigned long)ts, (unsigned long)sc);
-
-    ts = phone_session_now_ms();
-    sc = sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
-                            | SL_BT_SM_CONFIGURATION_MITM_REQUIRED
-                            | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED,
-                             sl_bt_sm_io_capability_displayonly);
-    USER_LOG_INFO("[SM]   [%lums] sm_configure(SC+MITM+BR+DisplayOnly) sc=0x%04lx" USER_LOG_NL,
-                  (unsigned long)ts, (unsigned long)sc);
-
-    ts = phone_session_now_ms();
-    sc = sl_bt_sm_set_passkey((int32_t)g_sess.pairing_passkey);
-    USER_LOG_INFO("[SM]   [%lums] sm_set_passkey(******) sc=0x%04lx" USER_LOG_NL,
-                  (unsigned long)ts, (unsigned long)sc);
-
-    ts = phone_session_now_ms();
-    sc = sl_bt_sm_set_bondable_mode(1);
-    USER_LOG_INFO("[SM]   [%lums] sm_set_bondable(1) sc=0x%04lx" USER_LOG_NL,
-                  (unsigned long)ts, (unsigned long)sc);
-
-    /* V1.2 23.6 系统配对模式: 广播 HID UUID + 断开 APP, 让系统 HID Host 扫描到 HID 设备并配对
-     * (设备连着 APP 时广播已停, 系统看不到 HID; 断开后恢复广播带 HID UUID) */
-    g_sess.pairing_awaiting_system = true;
-    hid_service_set_runtime_enabled(true);
     ts = phone_session_now_ms();
     sc = sl_bt_connection_close(g_sess.conn_handle);
-    USER_LOG_INFO("[SM]   [%lums] system pairing: HID adv ON + close APP conn=%u sc=0x%04lx" USER_LOG_NL,
+    USER_LOG_INFO("[SM]   [%lums] system pairing: close APP conn=%u sc=0x%04lx" USER_LOG_NL,
                   (unsigned long)ts, (unsigned)g_sess.conn_handle, (unsigned long)sc);
+    if (sc != SL_STATUS_OK) {
+      USER_LOG_INFO("[SM] PAIR_READY close APP failed, rollback" USER_LOG_NL);
+      pairing_context_destroy();
+      return;
+    }
+
+    /* 关闭请求已受理，断连事件恢复带 HID UUID 的广播。 */
+    g_sess.pairing_awaiting_system = true;
+    hid_service_set_runtime_enabled(true);
   }
 
   g_sess.pairing_window_deadline_ms = phone_session_now_ms()
@@ -4207,18 +4912,128 @@ static void handle_passive_pair_cancel(uint16_t seq,
 }
 
 /* ========================================================================== */
+/* CR008-007: SM 事件回调 — 新 Bond 请求事前确认                              */
+/* ========================================================================== */
+
+void phone_sm_on_sm_confirm_bonding(uint8_t connection,
+                                    uint8_t bonding_handle)
+{
+  uint8_t current_app_key_id[16];
+  uint32_t current_bind_version;
+  uint64_t now;
+  sl_status_t storage_sc;
+  sl_status_t confirm_sc;
+  bool authorized = false;
+  const char *reason = "not in APP authorized Pairing window";
+
+  USER_LOG_INFO("[SM] SM_CONFIRM_BONDING conn=%u existingBond=0x%02X"
+                USER_LOG_NL, (unsigned)connection,
+                (unsigned)bonding_handle);
+
+  if (connection != g_sess.conn_handle) {
+    USER_LOG_INFO("[SM] CR008-007 ignore Bond confirmation for non-phone conn=%u"
+                  USER_LOG_NL, (unsigned)connection);
+    return;
+  }
+
+  memset(current_app_key_id, 0, sizeof(current_app_key_id));
+  current_bind_version = phone_storage_get_bind_version();
+  storage_sc = phone_storage_get_app_key_id(current_app_key_id);
+  now = phone_session_now_ms();
+
+  if (bonding_handle != SL_BT_INVALID_BONDING_HANDLE) {
+    reason = "existing Bond overwrite request";
+  } else if (!g_sess.pairing_window_active
+             || !g_sess.pairing_awaiting_system) {
+    reason = "not in APP authorized Pairing window";
+  } else if (g_sess.pairing_window_deadline_ms == 0ULL
+             || now >= g_sess.pairing_window_deadline_ms) {
+    reason = "APP authorized Pairing window expired";
+  } else if (phone_storage_get_bind_state() != PHONE_DEVICE_STATE_BOUND
+             || !phone_storage_is_bound()) {
+    reason = "APP binding anchor missing";
+  } else if (storage_sc != SL_STATUS_OK || current_bind_version == 0U) {
+    reason = "APP binding identity missing";
+  } else if (memcmp(current_app_key_id, g_sess.pairing_app_key_id, 16U) != 0
+             || current_bind_version != g_sess.pairing_bind_version) {
+    reason = "APP binding identity changed";
+  } else if (g_authorized_bond_commit.active) {
+    reason = "authorized Bond commit busy";
+  } else {
+    authorized = true;
+    reason = "APP authorized Pairing window";
+  }
+
+  confirm_sc = sl_bt_sm_bonding_confirm(connection, authorized ? 1U : 0U);
+  USER_LOG_INFO("[SM] CR008-007 Bond request %s conn=%u reason=%s sc=0x%04lX"
+                USER_LOG_NL, authorized ? "ACCEPT" : "REJECT",
+                (unsigned)connection, reason, (unsigned long)confirm_sc);
+
+  if (!authorized || confirm_sc != SL_STATUS_OK) {
+    if (g_sess.pairing_window_active) {
+      pairing_context_destroy();
+    }
+    connection_admission_disconnect(
+        authorized ? "Bond confirmation failed" : reason);
+  }
+}
+
+/* ========================================================================== */
 /* V1.2: SM 事件回调 — Pairing 成功                                           */
 /* ========================================================================== */
 
-void phone_sm_on_sm_bonded(uint8_t connection)
+void phone_sm_on_sm_bonded(uint8_t connection, uint8_t bonding,
+                           uint8_t security_mode)
 {
-  (void)connection;
-  USER_LOG_INFO("[SM] SM_BONDED conn=%u" USER_LOG_NL, (unsigned)connection);
+  USER_LOG_INFO("[SM] SM_BONDED conn=%u bond=%u sec=L%u" USER_LOG_NL,
+                (unsigned)connection, (unsigned)bonding,
+                (unsigned)security_mode + 1U);
+
+  if (connection != g_sess.conn_handle) {
+    USER_LOG_INFO("[SM] CR008-007 ignore Bond event for non-phone conn=%u"
+                  USER_LOG_NL, (unsigned)connection);
+    return;
+  }
 
   if (g_sess.pairing_window_active) {
+    if (!g_sess.pairing_awaiting_system
+        || connection != g_sess.conn_handle
+        || bonding == SL_BT_INVALID_BONDING_HANDLE
+        || security_mode != sl_bt_connection_mode1_level4
+        || g_sess.pairing_bind_version == 0U
+        || g_authorized_bond_commit.active) {
+      USER_LOG_ERROR("[SM] CR008-006 unexpected/weak Bond, authorization rejected"
+                     USER_LOG_NL);
+      if (bonding != SL_BT_INVALID_BONDING_HANDLE) {
+        sl_status_t delete_sc = sl_bt_sm_delete_bonding(bonding);
+        USER_LOG_ERROR("[SM] CR008-006 rejected Bond delete sc=0x%04lX"
+                       USER_LOG_NL, (unsigned long)delete_sc);
+      }
+      authorized_bond_force_passive_off();
+      pairing_context_destroy();
+      return;
+    }
+
+    g_authorized_bond_commit.active = true;
+    g_authorized_bond_commit.connection = connection;
+    g_authorized_bond_commit.bonding = bonding;
+    g_authorized_bond_commit.event_security_mode = security_mode;
+    memcpy(g_authorized_bond_commit.app_key_id,
+           g_sess.pairing_app_key_id, 16U);
+    g_authorized_bond_commit.bind_version = g_sess.pairing_bind_version;
+
     pairing_context_destroy();
-    USER_LOG_INFO("[SM] Pairing succeeded, bond written, passiveEnabled still OFF" USER_LOG_NL);
+    USER_LOG_INFO("[SM] CR008-006 Bond commit queued, passiveEnabled remains OFF"
+                  USER_LOG_NL);
+    return;
   }
+
+  /* CR008-007: APP 未执行 PREPARE/READY 时产生的新 Bond 不具备业务授权。
+   * 删除该 Bond 并断开，防止 Android 在 0x1006 后自动重建 L2 Bond。 */
+  USER_LOG_ERROR("[SM] CR008-007 Bond outside authorized Pairing window"
+                 USER_LOG_NL);
+  connection_admission_reject_bond(bonding,
+                                   "Bond outside authorized Pairing window");
 }
 
 /* ========================================================================== */
@@ -4227,15 +5042,30 @@ void phone_sm_on_sm_bonded(uint8_t connection)
 
 void phone_sm_on_sm_bonding_failed(uint8_t connection, uint16_t reason)
 {
-  (void)connection;
   USER_LOG_INFO("[SM] SM_BONDING_FAILED conn=%u reason=0x%04X" USER_LOG_NL,
                 (unsigned)connection, (unsigned)reason);
+
+  if (connection != g_sess.conn_handle) {
+    USER_LOG_INFO("[SM] CR008-007 ignore bonding failure for non-phone conn=%u"
+                  USER_LOG_NL, (unsigned)connection);
+    return;
+  }
 
   if (g_sess.pairing_window_active) {
     pairing_context_destroy();
     g_sess.pairing_fail_count_this_session++;
     USER_LOG_INFO("[SM] Pairing failed #%u this session" USER_LOG_NL,
                   (unsigned)g_sess.pairing_fail_count_this_session);
+    return;
+  }
+
+  if (g_connection_admission.state == PHONE_ADMISSION_WAIT_NOTIFY) {
+    connection_admission_disconnect("bonding failed before APP activity");
+  } else if (g_connection_admission.state == PHONE_ADMISSION_WAIT_APP) {
+    /* APP GATT 连接也可能先触发手机残留旧 LTK 的 0x1006。
+     * 已打开业务 CCCD 时保留到 APP 证明窗口结束，避免误杀合法重绑定。 */
+    USER_LOG_INFO("[SM] CR008-007 bonding failed during APP candidate, wait proof"
+                  USER_LOG_NL);
   }
 }
 
@@ -4246,6 +5076,10 @@ void phone_sm_on_sm_bonding_failed(uint8_t connection, uint16_t reason)
 static void handle_passive_enable(uint16_t seq,
                                    const phone_tlv_t *tlvs, uint8_t tlv_count)
 {
+  uint8_t matched_bonding = SL_BT_INVALID_BONDING_HANDLE;
+  const char *validation_reason = "authorization validation failed";
+  phone_auth_bond_validation_t validation;
+
   (void)tlvs; (void)tlv_count;
 
   USER_LOG_INFO("[SM] PASSIVE_ENABLE seq=%u" USER_LOG_NL, (unsigned)seq);
@@ -4267,8 +5101,28 @@ static void handle_passive_enable(uint16_t seq,
     return;
   }
 
+  /* CR008-008: 不能再用“Bond 表非空”代表当前 APP 授权。
+   * 即使是幂等 ENABLE，也必须重新确认 APP 锚点、授权记录和 L4 Bond 一致。 */
+  validation = authorized_bond_validate(&matched_bonding, &validation_reason);
+  if (validation != PHONE_AUTH_BOND_VALID) {
+    /* 当前 APP 连接中不立即删 Bond，避免删除触发断链而丢失错误响应；
+     * 后续 PREPARE/READY 仍按 CR008-005 在切换到系统 Pairing 前清旧 Bond。 */
+    authorized_bond_disable_invalid(validation, matched_bonding, false,
+                                    validation_reason, "PASSIVE_ENABLE");
+    send_error_response(PHONE_CMD_PASSIVE_ENABLE, seq, PHONE_RESULT_FAIL,
+                        (validation == PHONE_AUTH_BOND_STACK_ERROR)
+                            ? PHONE_ERR_INTERNAL_ERROR
+                            : PHONE_ERR_PAIRING_REQUIRED,
+                        true, true, false);
+    return;
+  }
+
+  g_authorized_bonding_handle = matched_bonding;
+
   /* 幂等: 已开启 → 直接返回 SUCCESS */
   if (g_sess.passive_enabled) {
+    g_sess.hid_runtime_enabled = true;
+    hid_service_set_runtime_enabled(true);
     USER_LOG_INFO("[SM] PASSIVE_ENABLE already enabled (idempotent)" USER_LOG_NL);
     {
       uint8_t payload[64];
@@ -4291,22 +5145,14 @@ static void handle_passive_enable(uint16_t seq,
     return;
   }
 
-  /* Bond 存在性检查: 查询 BLE bonding 表 */
-  /* 协议 §23.2: 无有效 Bond → 返回 PAIRING_REQUIRED(0x000C), 需走 Pairing */
-  if (!hid_service_is_bonded()) {
-    USER_LOG_INFO("[SM] PASSIVE_ENABLE: no bond → PAIRING_REQUIRED" USER_LOG_NL);
-    send_error_response(PHONE_CMD_PASSIVE_ENABLE, seq, PHONE_RESULT_FAIL,
-                        PHONE_ERR_PAIRING_REQUIRED, true, true, false);
-    return;
-  }
-
-  /* Bond 存在: 启用无感 */
+  /* 授权 Bond 已通过严格校验: 启用无感。 */
   g_sess.passive_enabled = true;
   g_sess.hid_runtime_enabled = true;
   hid_service_set_runtime_enabled(true);  /* 广播加入 HID 特征, 供 OS 后台回连 */
   (void)phone_storage_set_passive_enabled(true);
 
-  USER_LOG_INFO("[SM] PASSIVE_ENABLE OK → passiveEnabled=ON, hidRuntime=ON" USER_LOG_NL);
+  USER_LOG_INFO("[SM] PASSIVE_ENABLE OK → passiveEnabled=ON, hidRuntime=ON authorizedBond=%u"
+                USER_LOG_NL, (unsigned)matched_bonding);
 
   /* 成功响应 */
   {

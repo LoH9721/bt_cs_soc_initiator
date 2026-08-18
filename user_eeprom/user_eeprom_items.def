@@ -25,6 +25,7 @@
  *   0x5000-0x50FF  手机协议主区 (10 个条目, 占用 ~450B)
  *   0x5200-0x52FF  手机协议备用区 (3 个条目, 占用 ~90B)
  *   0x5300-0x53FF  手机 RSSI 距离估算校准 (2 个条目, 占用 ~7B)
+ *   0x5500-0x55FF  HID 配置与授权手机 Bond 关联
  *   0x6000-0x6FFF  预留
  ******************************************************************************/
 
@@ -107,5 +108,11 @@ EEPROM_ITEM_X(PHONE_PEPS_SENS_ENTER_TH,    0x5430,  6,  "psens_enter_th",    EEP
 // ---- HID 调试配置 (0x5500 范围, 串口 hid_pin 写入, 断电保持) ----
 // 0x5510  HID_CFG_PIN    4+2=6B    [0x5510, 0x5516)  uint32 配对PIN, 0=无(随机)
 EEPROM_ITEM_X(HID_CFG_PIN,            0x5510,   4,  "hid_cfg_pin",         EEPROM_FLAG_NONE)
+
+// ---- CR008-006 授权手机 Bond 关联 (工厂复位清除) ----
+// 0x5520  PHONE_AUTHORIZED_BOND  28+2=30B  [0x5520, 0x553E)
+// data = formatVersion(1) + identityAddrType(1) + identityAddress(6)
+//      + appKeyId(16) + bindVersionBE(4), CRC16 由 user_eeprom 自动追加
+EEPROM_ITEM_X(PHONE_AUTHORIZED_BOND,  0x5520,  28,  "phone_authorized_bond", EEPROM_FLAG_NONE)
 
 #undef EEPROM_ITEM_X

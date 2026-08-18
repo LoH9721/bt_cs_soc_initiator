@@ -9,7 +9,6 @@
 #include "user_phone/phone_cfg.h"
 #include "user_log_console.h"
 #include "sl_sleeptimer.h"
-#include "sl_bt_api.h"
 #include <string.h>
 
 /* ========================================================================== */
@@ -80,13 +79,6 @@ void phone_session_reset(phone_session_t *sess)
 {
   if (sess == NULL) return;
 
-  /* V1.2: 断连前恢复 SM 默认配置 (避免残留 displayonly 模式) */
-  if (sess->pairing_window_active && !sess->pairing_awaiting_system) {
-    (void)sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
-                             | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED,
-                             sl_bt_sm_io_capability_noinputnooutput);
-  }
-
   /* 销毁所有 RAM 密钥 */
   phone_crypto_memzero(sess->bind_session_key, 16U);
   phone_crypto_memzero(sess->bg_ecdh_privkey, 32U);
@@ -107,8 +99,11 @@ void phone_session_reset(phone_session_t *sess)
   uint32_t was_pairing_passkey = sess->pairing_passkey;
   uint64_t was_pairing_deadline = sess->pairing_window_deadline_ms;
   uint8_t was_pairing_window_id[8];
+  uint8_t was_pairing_app_key_id[16];
+  uint32_t was_pairing_bind_version = sess->pairing_bind_version;
   if (was_pairing_awaiting) {
     memcpy(was_pairing_window_id, sess->pairing_window_id, 8U);
+    memcpy(was_pairing_app_key_id, sess->pairing_app_key_id, 16U);
   }
 
   memset(sess, 0, sizeof(*sess));
@@ -130,6 +125,8 @@ void phone_session_reset(phone_session_t *sess)
     sess->pairing_passkey = was_pairing_passkey;
     sess->pairing_window_deadline_ms = was_pairing_deadline;
     memcpy(sess->pairing_window_id, was_pairing_window_id, 8U);
+    memcpy(sess->pairing_app_key_id, was_pairing_app_key_id, 16U);
+    sess->pairing_bind_version = was_pairing_bind_version;
   }
   /* V1.2: passive 持久化字段断连保留 (quota 现在也持久化), transient 字段清零 */
   sess->passive_enabled = was_passive_enabled;
@@ -206,7 +203,14 @@ sl_status_t phone_session_begin_auth(phone_session_t *sess,
   sl_status_t sc;
 
   if (sess == NULL) return SL_STATUS_INVALID_PARAMETER;
-  (void)app_key_id;  /* 已通过 appKeyId 校验 */
+  if (app_key_id == NULL) return SL_STATUS_INVALID_PARAMETER;
+
+  /* CR008-006: 保留本 AUTH session 实际验证过的业务身份。
+   * 后续 Pairing 窗口必须绑定该快照，不能在断连后从当前 NVM 猜测。 */
+  phone_crypto_memzero(sess->session_key, 16U);
+  sess->auth_done = false;
+  sess->auth_challenge_active = false;
+  memcpy(sess->authenticated_app_key_id, app_key_id, 16U);
 
   /* 生成 BG24 临时 ECDH 密钥对 */
   sc = phone_crypto_ecdh_generate(sess->bg_ecdh_pubkey, sess->bg_ecdh_privkey);
@@ -492,16 +496,5 @@ void phone_session_process_timeouts(phone_session_t *sess)
     }
   }
 
-  /* V1.2: PASSIVE_PAIR 窗口超时 (30s PREPARE 或 60s READY) */
-  if (sess->pairing_window_active && sess->pairing_window_deadline_ms > 0ULL) {
-    if (now > sess->pairing_window_deadline_ms) {
-      (void)sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
-                               | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED,
-                               sl_bt_sm_io_capability_noinputnooutput);
-      sess->pairing_window_active = false;
-      phone_crypto_memzero(sess->pairing_window_id, 8U);
-      sess->pairing_passkey = 0U;
-      USER_LOG_INFO("[SESSION] PAIRING_WINDOW_TIMEOUT" USER_LOG_NL);
-    }
-  }
+  /* CR008-001: PASSIVE_PAIR 超时由 phone_sm 负责, 禁止在 Session 层做部分清理。 */
 }

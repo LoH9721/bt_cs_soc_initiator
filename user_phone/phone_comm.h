@@ -36,6 +36,24 @@ sl_status_t phone_comm_send(const uint8_t *data, uint16_t len);
 uint8_t phone_comm_connection_handle_get(void);
 bool phone_comm_normal_actions_allowed(void);
 
+/** 当前连接是否关联了栈内 Bond；不表示该 Bond 已被 APP 授权。 */
+bool phone_comm_current_link_is_bonded(void);
+
+/** 当前连接是否处于 BLE 加密状态。 */
+bool phone_comm_current_link_is_encrypted(void);
+
+/** 当前连接的 Bond handle；未关联 Bond 时返回 SL_BT_INVALID_BONDING_HANDLE。 */
+uint8_t phone_comm_current_bonding_handle_get(void);
+
+/** 当前连接的 BLE Security Mode；未连接时返回 Mode 1 Level 1。 */
+uint8_t phone_comm_current_security_mode_get(void);
+
+/** 当前是否为 Passive ON、授权 Bond 且已达到 L4 的手机链路。 */
+bool phone_comm_current_link_is_authorized_passive(void);
+
+/** 读取并清除一次授权 Passive L4 链路断开事件。 */
+bool phone_comm_consume_authorized_passive_disconnect(void);
+
 /** 切换到副广播 (0xA5) + 超时恢复 */
 void phone_comm_switch_to_secondary(void);
 void phone_comm_switch_to_primary(void);

@@ -71,6 +71,7 @@ static float    g_kf_x;        /* 状态: 估计距离 (m) */
 static float    g_kf_p;        /* 估计协方差 */
 static bool     g_kf_init;     /* 卡尔曼是否已初始化 */
 static bool     g_fused_valid;
+static uint64_t g_fused_last_ms;
 
 /* ========== 内部: 1D 卡尔曼滤波 (恒定位置模型) ========== */
 static void rang_kf_update(float z_meas_m)
@@ -91,6 +92,8 @@ static void rang_kf_update(float z_meas_m)
     g_kf_p = (1.0f - k) * p_pred;
   }
   g_fused_valid = true;
+  g_fused_last_ms = sl_sleeptimer_tick_to_ms(
+                      sl_sleeptimer_get_tick_count64());
 }
 
 /* ========== 内部: RSSI → 距离 (使用运行时校准参数) ========== */
@@ -161,6 +164,7 @@ void phone_rang_init(void)
   g_kf_p           = 1.0f;
   g_kf_init        = false;
   g_fused_valid    = false;
+  g_fused_last_ms  = 0ULL;
 
   /* 从 NVM 加载校准参数 (若 NVM 无效则使用默认值, 定义见 phone_rang.h) */
   rang_load_cal_from_nvm();
@@ -225,19 +229,25 @@ void phone_rang_reset(void)
   g_kf_init         = false;
   g_kf_x            = PHONE_RANG_INVALID_DIST_M;
   g_fused_valid     = false;
+  g_fused_last_ms   = 0ULL;
   g_poll_next_ms    = 0;
 }
 
 bool phone_rang_get_distance(float *dist_m)
 {
-  if (dist_m == NULL || !g_fused_valid) return false;
+  if (dist_m == NULL || !phone_rang_is_valid()) return false;
   *dist_m = g_kf_x;
   return true;
 }
 
 bool phone_rang_is_valid(void)
 {
-  return g_fused_valid;
+  uint64_t now;
+
+  if (!phone_comm_is_connected() || !g_fused_valid) return false;
+
+  now = sl_sleeptimer_tick_to_ms(sl_sleeptimer_get_tick_count64());
+  return (now - g_fused_last_ms) <= (uint64_t)PHONE_RANG_FRESH_TIMEOUT_MS;
 }
 
 bool phone_rang_get_local_rssi(int8_t *rssi)

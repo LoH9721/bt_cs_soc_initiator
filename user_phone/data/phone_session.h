@@ -39,6 +39,8 @@ typedef struct {
   uint8_t  pairing_window_id[8];           /* TRNG 生成的 8 字节随机窗口 ID */
   uint32_t pairing_passkey;                /* 6 位 Passkey (000000~999999) */
   uint64_t pairing_window_deadline_ms;     /* 窗口过期时间戳 (30s PREPARE / 60s READY) */
+  uint8_t  pairing_app_key_id[16];         /* 发起本窗口的已认证 APP 身份快照 */
+  uint32_t pairing_bind_version;           /* 发起本窗口时的业务绑定版本 */
   bool     pairing_window_active;          /* 配对窗口是否有效 */
   bool     pairing_awaiting_system;        /* READY 后等待系统 Pairing (断连不销毁窗口) */
   uint8_t  pairing_fail_count_this_session;/* 本 AUTH session 连续配对失败次数 (上限 3) */
@@ -58,6 +60,7 @@ typedef struct {
   uint8_t  bg_ecdh_privkey[32];   /* BG24 临时 ECDH 私钥 (RAM only) */
   uint8_t  bg_ecdh_pubkey[65];    /* BG24 临时 ECDH 公钥 */
   uint8_t  session_key[16];       /* 业务 sessionKey (RAM only) */
+  uint8_t  authenticated_app_key_id[16]; /* 当前 AUTH session 已验证的 appKeyId */
   uint64_t auth_deadline_ms;      /* 认证 challenge 过期时间 */
   bool     auth_challenge_active; /* 是否有待验证的 AUTH challenge */
   bool     auth_done;             /* 认证是否已完成 (sessionKey 有效) */

@@ -20,7 +20,6 @@
 #include "user_phone/phone_comm.h"
 #include "user_phone/phone_cfg.h"
 #include "user_phone/data/phone_rang.h"
-#include "user_hid/hid_service.h"
 #include "user_eeprom/user_eeprom.h"
 #include "user_can_common/CanMatrix/CanMatrix_Cfg.h"
 #include "user_log_console.h"
@@ -87,8 +86,9 @@ static float    g_distance_m;                 /* 当前卡尔曼距离 (m) */
 static bool     g_distance_valid;             /* 距离有效标记 */
 static uint8_t  g_auto_cmd_pending;           /* one-shot 自动命令 */
 static uint32_t g_cmd_cooldown_ms;            /* 冷却截止时间戳 */
-static bool     g_hid_was_connected;          /* 上一周期 HID 连接状态 (断开下降沿检测) */
 static uint32_t g_disconnect_since_ms;        /* 断开持续计时起点 (0=未计时/已触发) */
+static int8_t   g_authorized_gate_last;        /* -1=未记录 0=关闭 1=开放 */
+static int8_t   g_range_fresh_last;            /* -1=未记录 0=过期 1=新鲜 */
 
 /* 记录每个阈值对是否从 EEPROM 加载 (用于 phone_zone 命令显示来源) */
 static bool     g_th_from_eeprom[3];
@@ -312,8 +312,9 @@ void user_app_phone_peps_init(void)
     g_distance_valid   = false;
     g_auto_cmd_pending = 0;
     g_cmd_cooldown_ms  = 0;
-    g_hid_was_connected = false;
     g_disconnect_since_ms = 0;
+    g_authorized_gate_last = -1;
+    g_range_fresh_last = -1;
 
     USER_LOG_INFO("[PHONE_PEPS] init done (debounce=%d cooldown=%ums)" USER_LOG_NL,
                   PHONE_PEPS_DEBOUNCE_COUNT, (int)PHONE_PEPS_AUTO_CMD_COOLDOWN_MS);
@@ -323,24 +324,38 @@ void user_app_phone_peps_init(void)
 void user_app_phone_peps_process(void)
 {
     bool     passive_on;
-    bool     hid_connected;
+    bool     authorized_link;
+    bool     authorized_disconnected;
     bool     dist_valid;
-    bool     hid_disconnected;   /* HID 断开下降沿 (自动闭锁触发) */
     uint16_t dist_cm;
     uint8_t  raw_zone;
 
-    /* V1.2: 无感判断前置条件 = passive_enabled(无感授权) + 系统 HID 连接
-     * (不再依赖 APP 连接/AUTH, 见协议 §23.11) */
+    /* CR008-009/010: 区域判断和自动落锁共享授权 Passive L4 事实。 */
     passive_on    = phone_comm_is_passive_enabled();
-    hid_connected = hid_service_is_connected();
+    authorized_link = phone_comm_current_link_is_authorized_passive();
+    authorized_disconnected =
+        phone_comm_consume_authorized_passive_disconnect();
     dist_valid    = phone_rang_is_valid();
 
-    /* 检测 HID 断开下降沿 (曾连接 → 现在断开) */
-    hid_disconnected = g_hid_was_connected && !hid_connected;
-    g_hid_was_connected = hid_connected;
+    if ((int8_t)(authorized_link ? 1 : 0) != g_authorized_gate_last) {
+        g_authorized_gate_last = (int8_t)(authorized_link ? 1 : 0);
+        if (authorized_link) {
+            /* 禁止复用同一连接在 L1/L2 阶段提前采集的RSSI；授权门控开放后
+             * 必须等待本连接在L4阶段产生新的测距样本。 */
+            phone_rang_reset();
+            dist_valid = false;
+        }
+        USER_LOG_INFO("[PHONE_PEPS] CR008-009 gate=%s passive=%s bond=0x%02X sec=L%u"
+                      USER_LOG_NL,
+                      authorized_link ? "OPEN" : "CLOSED",
+                      passive_on ? "ON" : "OFF",
+                      (unsigned)phone_comm_current_bonding_handle_get(),
+                      (unsigned)phone_comm_current_security_mode_get() + 1U);
+    }
 
-    /* ---- 无感未授权 或 系统 HID 未连接: 输出未知, 重置所有状态 ---- */
-    if (!passive_on || !hid_connected) {
+    /* ---- 非授权 Passive L4 链路: 输出未知, 重置所有区域状态 ---- */
+    if (!authorized_link) {
+        g_range_fresh_last = -1;
         g_current_zone     = (uint8_t)APP_PROTO_ZONE_DISCONNECTED_UNKNOWN;
         g_pending_zone     = (uint8_t)APP_PROTO_ZONE_DISCONNECTED_UNKNOWN;
         g_debounce_cnt     = 0;
@@ -350,39 +365,60 @@ void user_app_phone_peps_process(void)
         g_auto_cmd_pending = 0;
         g_cmd_cooldown_ms  = 0;
 
-        /* 自动闭锁: HID 断开并连续断开 SUSTAIN_MS(5s) 才触发 (闭锁不消耗额度, 仅检查额度未耗尽)
-         * 前提: 无感使能 + 额度未耗尽 + 当前未处于闭锁状态
-         * 实现: 断开下降沿启动计时; 期间任一周期重新连接则取消计时 (见下方已连接分支);
-         *       计时满 5s 触发一次闭锁并复位, 避免每个周期重复触发 */
-        if (passive_on
-            && phone_comm_get_passive_quota() > 0U
-            && phone_comm_get_vehicle_lock_state() != (uint8_t)PHONE_LOCK_STATE_LOCKED) {
+        /* CR008-010: 只有断开前确认的授权 Passive L4 链路才能启动计时。
+         * 未授权连接既不能启动，也不能取消已有的授权断连计时。 */
+        if (!passive_on) {
+            g_disconnect_since_ms = 0U;
+        } else {
             uint64_t now_ms = sl_sleeptimer_tick_to_ms(
                                 sl_sleeptimer_get_tick_count64());
 
-            /* 断开下降沿: 启动持续断开计时 (仅首次) */
-            if (hid_disconnected && g_disconnect_since_ms == 0U) {
+            if (authorized_disconnected
+                && g_disconnect_since_ms == 0U
+                && phone_comm_get_passive_quota() > 0U
+                && phone_comm_get_vehicle_lock_state()
+                     != (uint8_t)PHONE_LOCK_STATE_LOCKED) {
                 g_disconnect_since_ms = (uint32_t)now_ms;
-                USER_LOG_DEBUG("[PHONE_PEPS] disconnect sustain timer start" USER_LOG_NL);
+                USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized disconnect timer start"
+                              USER_LOG_NL);
             }
 
-            /* 连续断开满 5s: 触发一次自动闭锁, 复位计时 */
-            if (g_disconnect_since_ms != 0U
-                && ((uint32_t)now_ms - g_disconnect_since_ms)
-                   >= PHONE_PEPS_DISCONNECT_LOCK_SUSTAIN_MS) {
-                g_auto_cmd_pending = (uint8_t)APP_PROTO_REMOTE_CMD_LOCK;
-                g_disconnect_since_ms = 0U;
-                USER_LOG_INFO("[PHONE_PEPS] AUTO LOCK (HID disconnected %ums)" USER_LOG_NL,
-                              (unsigned)PHONE_PEPS_DISCONNECT_LOCK_SUSTAIN_MS);
+            if (g_disconnect_since_ms != 0U) {
+                if (phone_comm_get_passive_quota() == 0U
+                    || phone_comm_get_vehicle_lock_state()
+                         == (uint8_t)PHONE_LOCK_STATE_LOCKED) {
+                    USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized disconnect timer cancel: condition changed"
+                                  USER_LOG_NL);
+                    g_disconnect_since_ms = 0U;
+                } else if (((uint32_t)now_ms - g_disconnect_since_ms)
+                           >= PHONE_PEPS_DISCONNECT_LOCK_SUSTAIN_MS) {
+                    g_auto_cmd_pending = (uint8_t)APP_PROTO_REMOTE_CMD_LOCK;
+                    g_disconnect_since_ms = 0U;
+                    USER_LOG_INFO("[PHONE_PEPS] AUTO LOCK (authorized link disconnected %ums)"
+                                  USER_LOG_NL,
+                                  (unsigned)PHONE_PEPS_DISCONNECT_LOCK_SUSTAIN_MS);
+                }
             }
         }
         return;
     }
 
-    /* 已连接: 取消断开持续计时 (断开不再连续, 不触发自动闭锁) */
-    g_disconnect_since_ms = 0U;
+    /* 只有授权 Passive L4 链路恢复才能取消待执行的自动闭锁。 */
+    if (g_disconnect_since_ms != 0U) {
+        USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized reconnect → lock timer cancel"
+                      USER_LOG_NL);
+        g_disconnect_since_ms = 0U;
+    }
 
-    /* ---- 距离暂时无效: 保持当前 zone, 不触发任何命令 ---- */
+    if ((int8_t)(dist_valid ? 1 : 0) != g_range_fresh_last) {
+        g_range_fresh_last = (int8_t)(dist_valid ? 1 : 0);
+        USER_LOG_INFO("[PHONE_PEPS] CR008-009 range=%s timeout=%ums"
+                      USER_LOG_NL,
+                      dist_valid ? "FRESH" : "STALE",
+                      (unsigned)PHONE_RANG_FRESH_TIMEOUT_MS);
+    }
+
+    /* ---- 当前连接尚无新鲜距离或已超时: 保持 zone, 不触发任何命令 ---- */
     if (!dist_valid) {
         g_distance_valid = false;
         return;
@@ -499,7 +535,6 @@ void user_app_phone_peps_on_disconnected(void)
     g_distance_m       = 0.0f;
     g_auto_cmd_pending = 0;
     g_cmd_cooldown_ms  = 0;
-    g_hid_was_connected = false;
 
     USER_LOG_DEBUG("[PHONE_PEPS] disconnected" USER_LOG_NL);
 }

@@ -40,7 +40,6 @@
 
 #include "user_console.h"
 #include "user_phone/phone_comm.h"
-#include "user_phone/data/phone_storage.h"
 #include "user_hid/hid_service.h"
 #include "user_voltage.h"
 #include "user_can_common/RteSys.h"
@@ -84,14 +83,6 @@ void app_init(void)
 #endif /* APP_KEY_ENABLE */
 
   phone_comm_init();
-
-  /* V1.2: HID 无感上电恢复 — 持久化 passive_enabled 为 ON 时恢复 HID 广播,
-   * 复用已存 Bond 供手机 OS 后台自动回连 (不新增额度/不提前解除静默) */
-  {
-    bool passive_on = false;
-    (void)phone_storage_get_passive_enabled(&passive_on);
-    hid_service_set_runtime_enabled(passive_on);
-  }
 
   /* HID 调试 PIN 上电恢复 (串口 hid_pin 写入 EE, 断电保持) */
   {

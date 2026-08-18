@@ -51,6 +51,11 @@ static bool     g_nm_sleep_req      = false;
 /* 本地休眠条件: 无手机/钥匙连接 + 车辆非 IGN/START + 无 PEPS 活动区 */
 static bool nm_check_sleep_conditions(void)
 {
+#if APP_NO_CAN_PHONE_DEBUG
+    /* DBG-NOCAN-001: 无 CAN 时 RTE 保持 OFF，禁止其在 30 秒后触发自动休眠。 */
+    return false;
+#endif
+
     if (phone_comm_is_connected()) return false;
 #if APP_KEY_ENABLE
     if (key_connect_is_connected()) return false;

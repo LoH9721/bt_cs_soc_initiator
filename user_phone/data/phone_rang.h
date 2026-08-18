@@ -20,6 +20,9 @@
 #define PHONE_RANG_DEFAULT_RSSI_10M          (-85)   /* 10m 处 RSSI 默认值, 对应 n=2.7 */
 #define PHONE_RANG_DEFAULT_PATH_LOSS_N       2.70f   /* n 默认值 (安全回退) */
 
+/* CR008-009: 最后一次成功融合测距超过该时间即不得用于 PEPS。 */
+#define PHONE_RANG_FRESH_TIMEOUT_MS          1500U
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,13 +35,13 @@ void phone_rang_process_action(void);
 /** 喂入远端 RSSI (由 phone_cmd 解析 0x12 帧后调用) */
 void phone_rang_feed_remote_rssi(int8_t rssi);
 
-/** 重置所有数据 (断连 / 进入 NORMAL 时调用) */
+/** 重置当前连接的所有测距数据 (连接建立时调用) */
 void phone_rang_reset(void);
 
-/** 获取卡尔曼滤波后的融合距离 (m), 无有效数据返回 false */
+/** 获取当前连接的卡尔曼滤波后融合距离 (m), 未连接或无有效数据返回 false */
 bool phone_rang_get_distance(float *dist_m);
 
-/** 距离估算是否有效 */
+/** 当前连接的距离估算是否存在且未超过 PHONE_RANG_FRESH_TIMEOUT_MS。 */
 bool phone_rang_is_valid(void);
 
 /** 获取本端 RSSI (ECU 收到手机信号的 RSSI, 单位 dBm), 无有效数据返回 false */

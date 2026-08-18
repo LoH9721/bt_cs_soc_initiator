@@ -63,6 +63,15 @@
 #define APP_KEY_ENABLE                        0
 #endif
 
+// <q APP_NO_CAN_PHONE_DEBUG> Enable no-CAN phone protocol debug mode
+// <i> Debug only: allow bind/rebind/control with a fixed VIN when CAN/VIU is
+// <i> unavailable. Does not override vehicle status reporting.
+// <i> Production firmware must keep this disabled.
+// <i> Default: 0
+#ifndef APP_NO_CAN_PHONE_DEBUG
+#define APP_NO_CAN_PHONE_DEBUG                1
+#endif
+
 // <<< end of configuration section >>>
 
 #endif // APP_CONFIG_H

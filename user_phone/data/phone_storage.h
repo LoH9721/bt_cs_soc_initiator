@@ -75,6 +75,30 @@ uint8_t  phone_storage_get_bind_state(void);
 sl_status_t phone_storage_set_bind_state(uint8_t state);
 
 // =============================================================================
+// CR008-006 授权手机 Bond 身份关联
+// =============================================================================
+
+typedef struct {
+  uint8_t  identity_addr_type;
+  uint8_t  identity_address[6];
+  uint8_t  app_key_id[16];
+  uint32_t bind_version;
+} phone_authorized_bond_t;
+
+/** 读取并校验授权 Bond 记录；记录不存在、CRC/版本/字段无效均返回失败。 */
+sl_status_t phone_storage_get_authorized_bond(phone_authorized_bond_t *record);
+
+/** 同步持久化授权 Bond 记录，返回时已完成 NVM 写入。 */
+sl_status_t phone_storage_set_authorized_bond_sync(
+    const phone_authorized_bond_t *record);
+
+/** 清除授权 Bond 记录；底层记录不存在时也视为成功。 */
+sl_status_t phone_storage_clear_authorized_bond(void);
+
+/** 授权 Bond 记录是否存在且格式有效。 */
+bool phone_storage_has_authorized_bond(void);
+
+// =============================================================================
 // 首次绑定: 原子写入 (备用区 → 主区)
 // =============================================================================
 

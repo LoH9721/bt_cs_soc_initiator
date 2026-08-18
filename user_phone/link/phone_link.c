@@ -21,6 +21,14 @@
 static uint8_t  phone_link_adv_handle  = 0xFFU;
 static uint8_t  m_conn_handle = SL_BT_INVALID_CONNECTION_HANDLE;
 
+/* CR008-004: 当前物理链路的安全事实；已 Bond 不等于已被 APP 授权。 */
+typedef struct {
+  uint8_t bonding_handle;
+  uint8_t security_mode;
+} phone_link_security_state_t;
+
+static phone_link_security_state_t phone_link_security_state;
+
 /* 广播数据缓冲区 */
 static uint8_t  phone_link_ad_buf[PHONE_ADV_DATA_MAX_LEN];
 static uint8_t  phone_link_ad_len;
@@ -31,6 +39,39 @@ static uint8_t  phone_link_sr_len;
 static uint64_t phone_link_adv_refresh_deadline_ms;
 // 广播恢复重试
 static uint64_t phone_link_adv_recover_retry_at_ms;
+
+// ---------------------------------------------------------------------------
+// 当前连接安全状态
+// ---------------------------------------------------------------------------
+static void phone_link_security_reset(void)
+{
+  phone_link_security_state.bonding_handle = SL_BT_INVALID_BONDING_HANDLE;
+  phone_link_security_state.security_mode = sl_bt_connection_mode1_level1;
+}
+
+static const char *phone_link_security_mode_name(uint8_t security_mode)
+{
+  switch (security_mode) {
+    case sl_bt_connection_mode1_level1: return "L1";
+    case sl_bt_connection_mode1_level2: return "L2";
+    case sl_bt_connection_mode1_level3: return "L3";
+    case sl_bt_connection_mode1_level4: return "L4";
+    default:                            return "UNKNOWN";
+  }
+}
+
+static void phone_link_security_log(const char *event)
+{
+  USER_LOG_INFO("[PHONE] LINK_SECURITY %s conn=%u bond=0x%02X mode=%s(0x%02X) bonded=%s encrypted=%s"
+                USER_LOG_NL,
+                event,
+                (unsigned)m_conn_handle,
+                (unsigned)phone_link_security_state.bonding_handle,
+                phone_link_security_mode_name(phone_link_security_state.security_mode),
+                (unsigned)phone_link_security_state.security_mode,
+                phone_link_current_is_bonded() ? "Y" : "N",
+                phone_link_current_is_encrypted() ? "Y" : "N");
+}
 
 // ---------------------------------------------------------------------------
 // 单调毫秒时间
@@ -195,6 +236,8 @@ static void phone_link_set_public_identity(void)
 void phone_link_init(void)
 {
   phone_link_adv_handle  = 0xFFU;
+  m_conn_handle = SL_BT_INVALID_CONNECTION_HANDLE;
+  phone_link_security_reset();
   phone_link_adv_refresh_deadline_ms  = 0U;
   phone_link_adv_recover_retry_at_ms  = 0U;
 
@@ -207,9 +250,10 @@ void phone_link_init(void)
   {
     sl_status_t sc;
     sc = sl_bt_sm_configure(SL_BT_SM_CONFIGURATION_SC_ONLY
-                            | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED,
+                            | SL_BT_SM_CONFIGURATION_BONDING_REQUIRED
+                            | SL_BT_SM_CONFIGURATION_BONDING_REQUEST_REQUIRED,
                              sl_bt_sm_io_capability_noinputnooutput);
-    USER_LOG_INFO("[PHONE] init: sm_configure(SC+BR+NoIO) sc=0x%04lx" USER_LOG_NL, (unsigned long)sc);
+    USER_LOG_INFO("[PHONE] init: sm_configure(SC+BR+BondConfirm+NoIO) sc=0x%04lx" USER_LOG_NL, (unsigned long)sc);
     sc = sl_bt_sm_store_bonding_configuration(2, 0);
     USER_LOG_INFO("[PHONE] init: sm_store_bonds(2) sc=0x%04lx" USER_LOG_NL, (unsigned long)sc);
     sc = sl_bt_sm_set_bondable_mode(0);
@@ -226,6 +270,33 @@ void phone_link_process_action(void)
 uint8_t phone_link_conn_handle(void)
 {
   return m_conn_handle;
+}
+
+bool phone_link_current_is_bonded(void)
+{
+  return m_conn_handle != SL_BT_INVALID_CONNECTION_HANDLE
+         && phone_link_security_state.bonding_handle
+              != SL_BT_INVALID_BONDING_HANDLE;
+}
+
+bool phone_link_current_is_encrypted(void)
+{
+  uint8_t mode = phone_link_security_state.security_mode;
+
+  return m_conn_handle != SL_BT_INVALID_CONNECTION_HANDLE
+         && (mode == sl_bt_connection_mode1_level2
+             || mode == sl_bt_connection_mode1_level3
+             || mode == sl_bt_connection_mode1_level4);
+}
+
+uint8_t phone_link_current_bonding_handle_get(void)
+{
+  return phone_link_security_state.bonding_handle;
+}
+
+uint8_t phone_link_current_security_mode_get(void)
+{
+  return phone_link_security_state.security_mode;
 }
 
 void phone_link_switch_to_secondary(void)
@@ -273,7 +344,10 @@ void phone_link_on_bt_event(sl_bt_msg_t *evt)
       if (d->role != sl_bt_connection_role_peripheral) break;
 
       m_conn_handle = d->connection;
-      phone_sm_on_connection_opened(d->connection);
+      phone_link_security_state.bonding_handle = d->bonding;
+      phone_link_security_state.security_mode = sl_bt_connection_mode1_level1;
+      phone_link_security_log("OPEN");
+      phone_sm_on_connection_opened(d->connection, d->bonding);
 
       if (phone_link_adv_handle != 0xFFU) {
         sl_status_t sc = sl_bt_advertiser_stop(phone_link_adv_handle);
@@ -285,13 +359,40 @@ void phone_link_on_bt_event(sl_bt_msg_t *evt)
       break;
     }
 
+    case sl_bt_evt_connection_parameters_id: {
+      const sl_bt_evt_connection_parameters_t *d =
+          &evt->data.evt_connection_parameters;
+      if (d->connection != m_conn_handle) break;
+
+      if (phone_link_security_state.security_mode != d->security_mode) {
+        phone_link_security_state.security_mode = d->security_mode;
+        phone_link_security_log("SECURITY_CHANGED");
+      }
+      break;
+    }
+
+    case sl_bt_evt_sm_bonded_id: {
+      const sl_bt_evt_sm_bonded_t *d = &evt->data.evt_sm_bonded;
+      if (d->connection != m_conn_handle) break;
+
+      phone_link_security_state.bonding_handle = d->bonding;
+      phone_link_security_state.security_mode = d->security_mode;
+      phone_link_security_log("BONDED");
+      break;
+    }
+
     case sl_bt_evt_connection_closed_id: {
       const sl_bt_evt_connection_closed_t *d = &evt->data.evt_connection_closed;
       if (d->connection != m_conn_handle) break;
 
       USER_LOG_INFO("[PHONE] Disconnected conn=%u reason=0x%04X" USER_LOG_NL,
                     d->connection, d->reason);
-      phone_sm_on_connection_closed(d->connection);
+      phone_sm_on_connection_closed(
+          d->connection,
+          phone_link_security_state.bonding_handle,
+          phone_link_security_state.security_mode);
+      phone_link_security_reset();
+      phone_link_security_log("CLOSED");
       m_conn_handle = SL_BT_INVALID_CONNECTION_HANDLE;
 
       if (!phone_sm_is_connected() && phone_link_adv_handle != 0xFFU) {
