@@ -375,7 +375,6 @@ void user_app_phone_peps_process(void)
 
             if (authorized_disconnected
                 && g_disconnect_since_ms == 0U
-                && phone_comm_get_passive_quota() > 0U
                 && phone_comm_get_vehicle_lock_state()
                      != (uint8_t)PHONE_LOCK_STATE_LOCKED) {
                 g_disconnect_since_ms = (uint32_t)now_ms;
@@ -384,8 +383,7 @@ void user_app_phone_peps_process(void)
             }
 
             if (g_disconnect_since_ms != 0U) {
-                if (phone_comm_get_passive_quota() == 0U
-                    || phone_comm_get_vehicle_lock_state()
+                if (phone_comm_get_vehicle_lock_state()
                          == (uint8_t)PHONE_LOCK_STATE_LOCKED) {
                     USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized disconnect timer cancel: condition changed"
                                   USER_LOG_NL);
