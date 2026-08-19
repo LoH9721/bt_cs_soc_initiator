@@ -4,7 +4,7 @@
 - 工作分支：`feature/cr008-passive-hid-hardening`
 - 状态规则：`CODED`=代码完成；`BUILT`=编译通过；`TESTED`=实机验证通过
 - 记录日期：2026-08-18
-- 说明：本记录汇总 CR008-001～010 的改动点；每个 CR 独立修改、独立验证，用户负责编译。
+- 说明：本记录汇总已实施的 CR008 子项改动点；每个子项独立修改、独立验证，用户负责编译。
 
 ---
 
@@ -138,7 +138,7 @@
 
 - 状态：BUILT（用户确认编译和正向实机测试通过；负向/超时项待补测）
 - 改动点：
-  - 运行期缓存经 CR006 提交或 CR008 验证通过的授权 Bond handle（`g_authorized_bonding_handle`），并随解绑/换绑/回滚/启动校验失效；
+  - 运行期缓存经 CR008-006 提交或 CR008-008 验证通过的授权 Bond handle（`g_authorized_bonding_handle`），并随解绑/换绑/回滚/启动校验失效；
   - `phone_comm_current_link_is_authorized_passive()` 统一组合：Passive ON + 当前 Bond == 授权 Bond + 当前安全等级 L4；
   - PEPS 区域判断与自动解锁只接受该授权门控；门控 OPEN/CLOSED 转换输出日志；OPEN 时 `phone_rang_reset()` 禁止复用 L1/L2 阶段样本；
   - `phone_rang` 记录最后一次成功融合测距时间，超过 `PHONE_RANG_FRESH_TIMEOUT_MS`（1500ms）返回无效；FRESH/STALE 转换输出日志；
@@ -191,7 +191,7 @@
 
 ## 跨 CR 说明
 
-- `hid_service_is_connected()` 已退出 PEPS 区域判断（CR009）和自动落锁（CR010），仅保留作为 HID 连接状态查询。
-- 授权身份链条：CR006 持久化授权记录 → CR008 启动校验 → CR009 运行期门控 → CR010 断连落锁依据。
+- `hid_service_is_connected()` 已退出 PEPS 区域判断（CR008-009）和自动落锁（CR008-010），仅保留作为 HID 连接状态查询。
+- 授权身份链条：CR008-006 持久化授权记录 → CR008-008 启动校验 → CR008-009 运行期门控 → CR008-010 断连落锁依据。
 - 全程未修改：APP 业务协议/命令字/TLV/加密格式、GATT Handle、HID Report Map、Appearance、串口调试接口、NVM 既有条目格式。
-- 全程未提交 Git；当前全部改动在工作区中，由用户统一编译和提交。
+- CR008-001～010 已提交并推送；CR008-013 已在提交 `033599e` 中提交并推送。实时工作区和验证状态以 Git 与 `CR_STATUS.md` 为准。

@@ -186,8 +186,8 @@ passive_enabled
 
 - 状态/日期：`BUILT`，2026-08-18。
 - 原因：原 PEPS 仅检查 `passive_enabled + hid_service_is_connected + 曾有距离`；任意 Peripheral物理连接都会被标记为 HID连接，且一次成功测距会在整条连接期间永久有效。
-- 风险：未授权 APP观察窗口、旧/错误 Bond或尚未升到L4的连接可能提前进入区域判断；RSSI更新停止后仍可能继续使用陈旧距离。CR006/008建立的授权身份没有真正进入自动解锁执行门控。
-- 改动：运行期缓存经 CR006提交或 CR008验证通过的授权 Bond handle；`phone_comm`统一组合 Passive ON、当前连接Bond等于授权Bond和当前安全等级L4；PEPS区域与自动解锁只接受该统一门控。`phone_rang`记录最后一次成功融合时间，超过1500ms即返回无效；新连接继续由CR003清空全部测距状态。增加门控OPEN/CLOSED和距离FRESH/STALE转换日志。
+- 风险：未授权 APP观察窗口、旧/错误 Bond或尚未升到L4的连接可能提前进入区域判断；RSSI更新停止后仍可能继续使用陈旧距离。CR008-006/CR008-008 建立的授权身份没有真正进入自动解锁执行门控。
+- 改动：运行期缓存经 CR008-006 提交或 CR008-008 验证通过的授权 Bond handle；`phone_comm`统一组合 Passive ON、当前连接Bond等于授权Bond和当前安全等级L4；PEPS区域与自动解锁只接受该统一门控。`phone_rang`记录最后一次成功融合时间，超过1500ms即返回无效；新连接继续由 CR008-003 清空全部测距状态。增加门控OPEN/CLOSED和距离FRESH/STALE转换日志。
 - 边界：CR008-009实施时暂时保留的`hid_service_is_connected()`自动落锁下降沿现已由CR008-010替换；首次区域直接为解锁区时不立即自动解锁的现有策略保持不变。不改变APP协议、Pairing、NVM格式、HID、区域阈值、300ms轮询、车辆接口和串口调试接口。
 - 验证：待用户编译；合法后台重连必须先L4再打开授权门控，首个新RSSI后打印`range=FRESH`并恢复区域；L1、无Bond、非授权Bond和Passive OFF均不得输出有效区域或自动解锁；新连接首个RSSI前不得复用旧距离；连续1500ms无成功融合时应打印`range=STALE`且不得产生新命令；回归APP退出后的后台无感、CR007未授权配对拒绝和CR008启动恢复。
 - 当前：用户确认编译和正向实机测试通过；未授权连接、1500ms超时等负向项仍待补测，因此尚不标记`TESTED`。
