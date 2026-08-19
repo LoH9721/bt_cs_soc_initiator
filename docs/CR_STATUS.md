@@ -32,7 +32,7 @@
 | CR | 主题 | 阶段 | 当前继续点 | 计划文档 |
 |---|---|---|---|---|
 | CR008 | Passive HID 链路安全加固 | 收口补测 | CR008-006、CR008-007、CR008-009 补测；CR008-013 编译实测 | `CR008_PASSIVE_HID_HARDENING_PLAN.md` |
-| CR009 | 手机 PEPS 自动解闭锁策略 | 实施中 | CR009-006 已 TESTED；下一步 CR009-001 | `CR009_PHONE_PEPS_AUTO_LOCK_PLAN.md` |
+| CR009 | 手机 PEPS 自动解闭锁策略 | 实施中 | CR009-001 已 BUILT；下一步 CR009-002 | `CR009_PHONE_PEPS_AUTO_LOCK_PLAN.md` |
 
 ## 3. CR008 实时状态
 
@@ -58,7 +58,7 @@
 
 | 子项 | 候选内容 | 状态 | 依赖/说明 |
 |---|---|---|---|
-| CR009-001 | 车辆条件门控（解锁要求当前 LOCKED、闭锁要求当前 UNLOCKED；门/尾门抑制、非静默；不硬性 IGN/门） | CANDIDATE | 依赖 CR008-009 授权门控与新鲜测距 |
+| CR009-001 | 车辆条件门控（解锁要求当前 LOCKED、闭锁要求当前 UNLOCKED；门/尾门抑制、非静默；不硬性 IGN/门） | BUILT | 编译通过，实机待测 |
 | CR009-002 | Approach / Leave Cycle 与目标状态门闩（一次周期只动一次） | CANDIDATE | 依赖 001 |
 | CR009-003 | Phone Auto 命令结果闭环（初版不自动重试） | CANDIDATE | 依赖 002 |
 | CR009-004 | 正常离车闭锁请求（可信离车意图） | CANDIDATE | 依赖 001/002/003 |

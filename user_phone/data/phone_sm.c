@@ -4415,6 +4415,11 @@ bool phone_sm_is_passive_enabled(void)
   return g_sess.passive_enabled;
 }
 
+bool phone_sm_is_silent(void)
+{
+  return g_sess.is_silent;
+}
+
 bool phone_sm_is_authorized_bonding(uint8_t bonding)
 {
   return bonding != SL_BT_INVALID_BONDING_HANDLE

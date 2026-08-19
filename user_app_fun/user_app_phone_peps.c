@@ -20,6 +20,7 @@
 #include "user_phone/phone_comm.h"
 #include "user_phone/phone_cfg.h"
 #include "user_phone/data/phone_rang.h"
+#include "user_vehicle_state.h"
 #include "user_eeprom/user_eeprom.h"
 #include "user_can_common/CanMatrix/CanMatrix_Cfg.h"
 #include "user_log_console.h"
@@ -329,6 +330,9 @@ void user_app_phone_peps_process(void)
     bool     dist_valid;
     uint16_t dist_cm;
     uint8_t  raw_zone;
+    uint8_t  lock_state;
+    bool     silent;
+    uint8_t  door_status;
 
     /* CR008-009/010: 区域判断和自动落锁共享授权 Passive L4 事实。 */
     passive_on    = phone_comm_is_passive_enabled();
@@ -336,6 +340,9 @@ void user_app_phone_peps_process(void)
     authorized_disconnected =
         phone_comm_consume_authorized_passive_disconnect();
     dist_valid    = phone_rang_is_valid();
+    lock_state = phone_comm_get_vehicle_lock_state();
+    silent = phone_comm_is_silent();
+    door_status = vehicle_state_get_door_status();
 
     if ((int8_t)(authorized_link ? 1 : 0) != g_authorized_gate_last) {
         g_authorized_gate_last = (int8_t)(authorized_link ? 1 : 0);
@@ -373,18 +380,24 @@ void user_app_phone_peps_process(void)
             uint64_t now_ms = sl_sleeptimer_tick_to_ms(
                                 sl_sleeptimer_get_tick_count64());
 
+            /* CR009-001: 断连闭锁门控 — 非静默且门/尾门全关才允许启动 */
             if (authorized_disconnected
                 && g_disconnect_since_ms == 0U
-                && phone_comm_get_vehicle_lock_state()
-                     != (uint8_t)PHONE_LOCK_STATE_LOCKED) {
+                && lock_state != (uint8_t)PHONE_LOCK_STATE_LOCKED
+                && silent == false
+                && door_status == 0U) {
                 g_disconnect_since_ms = (uint32_t)now_ms;
                 USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized disconnect timer start"
                               USER_LOG_NL);
+            } else if (authorized_disconnected) {
+                USER_LOG_INFO("[PHONE_PEPS] CR009-001 disconnect lock skipped" USER_LOG_NL);
             }
 
             if (g_disconnect_since_ms != 0U) {
-                if (phone_comm_get_vehicle_lock_state()
-                         == (uint8_t)PHONE_LOCK_STATE_LOCKED) {
+                /* CR009-001: 静默开始或门/尾门打开也取消计时 */
+                if (lock_state == (uint8_t)PHONE_LOCK_STATE_LOCKED
+                    || silent == true
+                    || door_status != 0U) {
                     USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized disconnect timer cancel: condition changed"
                                   USER_LOG_NL);
                     g_disconnect_since_ms = 0U;
@@ -462,10 +475,15 @@ void user_app_phone_peps_process(void)
                     uint8_t cmd = detect_auto_cmd(g_current_zone, g_pending_zone);
                     /* V1.2: 自动解锁前置 — 当前已解锁则不重复解锁 */
                     if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_UNLOCK
-                        && phone_comm_get_vehicle_lock_state()
-                           == (uint8_t)PHONE_LOCK_STATE_UNLOCKED) {
+                        && lock_state == (uint8_t)PHONE_LOCK_STATE_UNLOCKED) {
                         cmd = 0;
                         USER_LOG_INFO("[PHONE_PEPS] AUTO UNLOCK skipped: already unlocked" USER_LOG_NL);
+                    }
+                    /* CR009-001: 静默期阻止自动解锁 */
+                    if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_UNLOCK
+                        && silent == true) {
+                        cmd = 0;
+                        USER_LOG_INFO("[PHONE_PEPS] CR009-001 AUTO UNLOCK skipped: silent" USER_LOG_NL);
                     }
                     /* V1.2: 自动解锁消耗额度, 额度耗尽则阻止自动解锁 */
                     if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_UNLOCK

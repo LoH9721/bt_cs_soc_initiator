@@ -90,6 +90,9 @@ bool phone_comm_is_notify_enabled(void);
 /** 无感钥匙是否已启用 (passive_enabled, NVM 持久化) */
 bool phone_comm_is_passive_enabled(void);
 
+/** 是否处于安全失败静默期 (SILENT) */
+bool phone_comm_is_silent(void);
+
 /** 消耗一次无感自动解锁额度 (额度耗尽返回 false) */
 bool phone_comm_consume_passive_quota(void);
 

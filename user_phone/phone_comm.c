@@ -269,6 +269,11 @@ bool phone_comm_is_passive_enabled(void)
   return phone_sm_is_passive_enabled();
 }
 
+bool phone_comm_is_silent(void)
+{
+  return phone_sm_is_silent();
+}
+
 bool phone_comm_consume_passive_quota(void)
 {
   return phone_sm_consume_passive_quota();

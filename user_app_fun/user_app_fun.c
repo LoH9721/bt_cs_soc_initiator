@@ -443,6 +443,7 @@ void user_app_fun_process(void)
         if (user_can_rte_read_canSig(RTE_282_BCM_FRDoorSt)) doors |= 0x02U;
         if (user_can_rte_read_canSig(RTE_VIU_DOOR_RL))      doors |= 0x04U;
         if (user_can_rte_read_canSig(RTE_VIU_DOOR_RR))      doors |= 0x08U;
+        if (user_can_rte_read_canSig(RTE_282_BCM_BackDoorSt)) doors |= 0x10U;  /* CR009-001: 尾门 */
 
         /* 锁状态: 0x282 VIU_BCMDriverDoorLockSt → 协议锁状态
          * 0=Lock → LOCKED(0x01), 1=Unlock → UNLOCKED(0x02) */

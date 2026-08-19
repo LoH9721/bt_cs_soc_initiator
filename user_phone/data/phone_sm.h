@@ -94,6 +94,9 @@ bool phone_sm_is_notify_enabled(void);
  */
 bool phone_sm_is_passive_enabled(void);
 
+/** 是否处于安全失败静默期 (SILENT) */
+bool phone_sm_is_silent(void);
+
 /** 指定运行期 Bond handle 是否对应当前 APP 授权手机。 */
 bool phone_sm_is_authorized_bonding(uint8_t bonding);
 
