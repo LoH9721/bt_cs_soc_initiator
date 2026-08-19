@@ -362,6 +362,9 @@ void user_app_phone_peps_process(void)
 
     /* ---- 非授权 Passive L4 链路: 输出未知, 重置所有区域状态 ---- */
     if (!authorized_link) {
+        /* CR009-005: 断开前最后确认区域（离车兜底判定，须在复位前取） */
+        uint8_t last_zone = g_current_zone;
+
         g_range_fresh_last = -1;
         g_current_zone     = (uint8_t)APP_PROTO_ZONE_DISCONNECTED_UNKNOWN;
         g_pending_zone     = (uint8_t)APP_PROTO_ZONE_DISCONNECTED_UNKNOWN;
@@ -380,17 +383,19 @@ void user_app_phone_peps_process(void)
             uint64_t now_ms = sl_sleeptimer_tick_to_ms(
                                 sl_sleeptimer_get_tick_count64());
 
-            /* CR009-001: 断连闭锁门控 — 非静默且门/尾门全关才允许启动 */
+            /* CR009-001/005: 断连闭锁门控 — 断开前在远区 + 非静默 + 门/尾门全关 */
             if (authorized_disconnected
                 && g_disconnect_since_ms == 0U
                 && lock_state != (uint8_t)PHONE_LOCK_STATE_LOCKED
                 && silent == false
-                && door_status == 0U) {
+                && door_status == 0U
+                && (last_zone == (uint8_t)APP_PROTO_ZONE_OUTSIDE_LOCK
+                    || last_zone == (uint8_t)APP_PROTO_ZONE_PARKING_INVALID)) {
                 g_disconnect_since_ms = (uint32_t)now_ms;
                 USER_LOG_INFO("[PHONE_PEPS] CR008-010 authorized disconnect timer start"
                               USER_LOG_NL);
             } else if (authorized_disconnected) {
-                USER_LOG_INFO("[PHONE_PEPS] CR009-001 disconnect lock skipped" USER_LOG_NL);
+                USER_LOG_INFO("[PHONE_PEPS] CR009-005 disconnect lock skipped (need far zone before drop)" USER_LOG_NL);
             }
 
             if (g_disconnect_since_ms != 0U) {
