@@ -72,6 +72,14 @@
 #define APP_NO_CAN_PHONE_DEBUG                1
 #endif
 
+// <q PHONE_PEPS_LEAVE_LOCK_ENABLE> 连接状态下走远自动闭锁 (CR009-004)
+// <i> 1 = 启用: 闭锁区→无效区(约15m)时自动请求闭锁
+// <i> 0 = 关闭: 走远不产生自动闭锁请求, 仅保留断连兜底(CR009-005)
+// <i> Default: 1
+#ifndef PHONE_PEPS_LEAVE_LOCK_ENABLE
+#define PHONE_PEPS_LEAVE_LOCK_ENABLE           1
+#endif
+
 // <<< end of configuration section >>>
 
 #endif // APP_CONFIG_H

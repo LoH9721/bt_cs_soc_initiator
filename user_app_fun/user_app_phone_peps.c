@@ -17,6 +17,7 @@
  *   user_app_key_peps.c — 模块结构模板
  ******************************************************************************/
 #include "user_app_phone_peps.h"
+#include "app_config.h"
 #include "user_phone/phone_comm.h"
 #include "user_phone/phone_cfg.h"
 #include "user_phone/data/phone_rang.h"
@@ -90,6 +91,10 @@ static uint32_t g_cmd_cooldown_ms;            /* 冷却截止时间戳 */
 static uint32_t g_disconnect_since_ms;        /* 断开持续计时起点 (0=未计时/已触发) */
 static int8_t   g_authorized_gate_last;        /* -1=未记录 0=关闭 1=开放 */
 static int8_t   g_range_fresh_last;            /* -1=未记录 0=过期 1=新鲜 */
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+static bool    g_leave_lock_qualified;         /* CR009-004: 离车闭锁资格 (解锁+任一门开到所有门关后有效) */
+static uint8_t g_prev_door_status;             /* CR009-004: 上一帧门状态 (任一门开到所有门关边沿检测) */
+#endif
 
 /* 记录每个阈值对是否从 EEPROM 加载 (用于 phone_zone 命令显示来源) */
 static bool     g_th_from_eeprom[3];
@@ -268,6 +273,14 @@ static uint8_t detect_auto_cmd(uint8_t prev_zone, uint8_t new_zone)
         return (uint8_t)APP_PROTO_REMOTE_CMD_UNLOCK;
     }
 
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+    /* CR009-004: 闭锁区 → 无效区: 连接状态下走远闭锁请求 (约 15m) */
+    if (prev_zone == (uint8_t)APP_PROTO_ZONE_OUTSIDE_LOCK
+        && new_zone == (uint8_t)APP_PROTO_ZONE_PARKING_INVALID) {
+        return (uint8_t)APP_PROTO_REMOTE_CMD_LOCK;
+    }
+#endif
+
     return 0;
 }
 
@@ -316,6 +329,10 @@ void user_app_phone_peps_init(void)
     g_disconnect_since_ms = 0;
     g_authorized_gate_last = -1;
     g_range_fresh_last = -1;
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+    g_leave_lock_qualified = false;
+    g_prev_door_status = 0U;
+#endif
 
     USER_LOG_INFO("[PHONE_PEPS] init done (debounce=%d cooldown=%ums)" USER_LOG_NL,
                   PHONE_PEPS_DEBOUNCE_COUNT, (int)PHONE_PEPS_AUTO_CMD_COOLDOWN_MS);
@@ -374,6 +391,9 @@ void user_app_phone_peps_process(void)
         g_distance_m       = 0.0f;
         g_auto_cmd_pending = 0;
         g_cmd_cooldown_ms  = 0;
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+        g_leave_lock_qualified = false;
+#endif
 
         /* CR008-010: 只有断开前确认的授权 Passive L4 链路才能启动计时。
          * 未授权连接既不能启动，也不能取消已有的授权断连计时。 */
@@ -426,6 +446,17 @@ void user_app_phone_peps_process(void)
         g_disconnect_since_ms = 0U;
     }
 
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+    /* CR009-004: 任一门开到所有门关闭边沿 + 车辆已解锁 → 建立离车闭锁资格 */
+    if (g_prev_door_status != 0U
+        && door_status == 0U
+        && lock_state == (uint8_t)PHONE_LOCK_STATE_UNLOCKED) {
+        g_leave_lock_qualified = true;
+        USER_LOG_INFO("[PHONE_PEPS] CR009-004 leave-lock qualified (all doors closed)" USER_LOG_NL);
+    }
+    g_prev_door_status = door_status;
+#endif
+
     if ((int8_t)(dist_valid ? 1 : 0) != g_range_fresh_last) {
         g_range_fresh_last = (int8_t)(dist_valid ? 1 : 0);
         USER_LOG_INFO("[PHONE_PEPS] CR008-009 range=%s timeout=%ums"
@@ -467,6 +498,14 @@ void user_app_phone_peps_process(void)
 
         if (g_pending_zone != g_current_zone) {
 
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+            /* CR009-004: 回到解锁区/车内 → 撤销离车闭锁资格 (无新门动作不恢复) */
+            if (g_pending_zone == (uint8_t)APP_PROTO_ZONE_OUTSIDE_UNLOCK
+                || g_pending_zone == (uint8_t)APP_PROTO_ZONE_IN_CAR) {
+                g_leave_lock_qualified = false;
+            }
+#endif
+
             USER_LOG_INFO("[PHONE_PEPS] %s -> %s (dist=%u cm)" USER_LOG_NL,
                           g_zone_names[g_current_zone],
                           g_zone_names[g_pending_zone],
@@ -496,13 +535,50 @@ void user_app_phone_peps_process(void)
                         cmd = 0;
                         USER_LOG_INFO("[PHONE_PEPS] AUTO UNLOCK blocked: quota exhausted" USER_LOG_NL);
                     }
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+                    /* CR009-004: 已闭锁则不重复闭锁 */
+                    if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_LOCK
+                        && lock_state == (uint8_t)PHONE_LOCK_STATE_LOCKED) {
+                        cmd = 0;
+                        USER_LOG_INFO("[PHONE_PEPS] CR009-004 AUTO LOCK skipped: already locked" USER_LOG_NL);
+                    }
+                    /* CR009-004: 静默期阻止自动闭锁 */
+                    if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_LOCK
+                        && silent == true) {
+                        cmd = 0;
+                        USER_LOG_INFO("[PHONE_PEPS] CR009-004 AUTO LOCK skipped: silent" USER_LOG_NL);
+                    }
+                    /* CR009-004: 门/尾门打开阻止自动闭锁 */
+                    if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_LOCK
+                        && door_status != 0U) {
+                        cmd = 0;
+                        USER_LOG_INFO("[PHONE_PEPS] CR009-004 AUTO LOCK skipped: door open" USER_LOG_NL);
+                    }
+                    /* CR009-004: 无离车闭锁资格 (解锁+任一门开到所有门关) 则不区域闭锁 */
+                    if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_LOCK
+                        && g_leave_lock_qualified == false) {
+                        cmd = 0;
+                        USER_LOG_INFO("[PHONE_PEPS] CR009-004 AUTO LOCK skipped: no leave-lock qualify" USER_LOG_NL);
+                    }
+#endif
                     if (cmd != 0) {
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+                        if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_LOCK) {
+                            /* CR009-004: 资格消耗, 本周期只区域闭锁一次 */
+                            g_leave_lock_qualified = false;
+                        }
+#endif
                         g_auto_cmd_pending = cmd;
                         g_cmd_cooldown_ms  = (uint32_t)now_ms
                                            + PHONE_PEPS_AUTO_CMD_COOLDOWN_MS;
 
-                        USER_LOG_INFO("[PHONE_PEPS] AUTO UNLOCK (cooldown %ums)" USER_LOG_NL,
-                                      PHONE_PEPS_AUTO_CMD_COOLDOWN_MS);
+                        if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_UNLOCK) {
+                            USER_LOG_INFO("[PHONE_PEPS] AUTO UNLOCK (cooldown %ums)" USER_LOG_NL,
+                                          PHONE_PEPS_AUTO_CMD_COOLDOWN_MS);
+                        } else {
+                            USER_LOG_INFO("[PHONE_PEPS] CR009-004 AUTO LOCK (cooldown %ums)" USER_LOG_NL,
+                                          PHONE_PEPS_AUTO_CMD_COOLDOWN_MS);
+                        }
                     }
                 }
             }
@@ -556,6 +632,10 @@ void user_app_phone_peps_on_disconnected(void)
     g_distance_m       = 0.0f;
     g_auto_cmd_pending = 0;
     g_cmd_cooldown_ms  = 0;
+#if PHONE_PEPS_LEAVE_LOCK_ENABLE
+    g_leave_lock_qualified = false;
+    g_prev_door_status = 0U;
+#endif
 
     USER_LOG_DEBUG("[PHONE_PEPS] disconnected" USER_LOG_NL);
 }
