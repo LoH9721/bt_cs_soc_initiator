@@ -69,7 +69,7 @@
 // <i> Production firmware must keep this disabled.
 // <i> Default: 0
 #ifndef APP_NO_CAN_PHONE_DEBUG
-#define APP_NO_CAN_PHONE_DEBUG                1
+#define APP_NO_CAN_PHONE_DEBUG                0
 #endif
 
 // <q PHONE_PEPS_LEAVE_LOCK_ENABLE> 连接状态下走远自动闭锁 (CR009-004)
