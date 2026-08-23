@@ -1,6 +1,6 @@
 # BG24 手机钥匙项目交接
 
-更新时间：2026-08-19
+更新时间：2026-08-20
 
 ## 1. 明天从这里开始
 
@@ -14,13 +14,13 @@
 
 下一项工作：
 
-`CR008-013 编译与实机验证 → CR008-006、CR008-007、CR008-009 剩余补测；CR009 仅进行候选子项设计确认`
+`CR009-004 编译与实机验证 → CR009-001、CR009-005 实机补测 → CR008-013 编译与实机验证及 CR008-006、CR008-007、CR008-009 剩余补测`
 
-当前进度：CR008-001～005 已完成；CR008-006 已完成取消、PREPARE 超时和错误 PIN 等负向实测，授权记录提交、清除和重启恢复仍需补测；CR008-007 已有系统蓝牙直接配对拒绝、观察窗口超时和 APP 场景实机日志，完整回归矩阵仍需补齐；CR008-008、010 已实机验证；CR008-009 编译与正向测试通过、负向项待补测；CR008-013 代码与文档已提交推送，等待编译和实机验证。CR008-011、012 暂停，不处理。CR009 当前为 DRAFT，尚无代码修改。
+当前进度：CR008-001～005 已完成；CR008-006 已完成取消、PREPARE 超时和错误 PIN 等负向实测，授权记录提交、清除和重启恢复仍需补测；CR008-007 已有系统蓝牙直接配对拒绝、观察窗口超时和 APP 场景实机日志，完整回归矩阵仍需补齐；CR008-008、010 已实机验证；CR008-009 编译与正向测试通过、负向项待补测；CR008-013 代码与文档已提交推送，等待编译和实机验证。CR008-011、012 暂停，不处理。CR009 已进入实施阶段：001 为 BUILT（实机待测），004 为 CODED（编译待确认），005 为 BUILT（实机待测），006 为 TESTED；002、003、008、009 已取消，007 仍为候选。
 
 跨 CR 实时进度统一见 `docs/CR_STATUS.md`；开发中途发现的问题先记录在 `docs/ISSUE_LOG.md`。本文件保留阶段交接快照，不作为逐项实时状态表。
 
-开始前先只读检查本文件、`docs/CR_STATUS.md`、当前 CR 的 PLAN/CHANGE_RECORD 和 Git 状态，不要直接修改，不要编译。CR008-011、012 暂停；CR009 每个子项在方案确认前不得进入代码修改。
+开始前先只读检查本文件、`docs/CR_STATUS.md`、当前 CR 的 PLAN/CHANGE_RECORD 和 Git 状态，不要直接修改，不要编译。CR008-011、012 暂停；CR009 中仅已记录为实施状态的子项可继续验证，候选子项仍须先完成方案确认。
 
 ## 2. 协作约定
 
@@ -53,8 +53,15 @@
 - `8e2eb43 docs: establish CR-008 passive HID hardening plan`
 - `da29044 feat(cr008): passive HID hardening CR008-006~010`
 - `eb73355 docs(cr008): add project docs, change records and git guide`
+- `033599e feat(cr008): CR008-013 0x65 灵敏度设置成功响应回显最新档位`
+- `ca4d3e0 feat(cr009): CR009-006 自动解锁额度解耦断连闭锁`
+- `4a18c0a feat(cr009): CR009-001 车辆条件门控（静默/门/尾门）`
+- `2d071db feat(cr009): CR009-005 断连闭锁兜底（断开前走远证据）`
+- `ab9734b feat(cr009): CR009-004 连接状态走远闭锁（门资格）`
+- `9233acc docs(cr009): 补 CR009-004/005 独立设计文档`
+- `cd3b60e docs(cr009): 新增 CR009 使用说明（md/Word/生成脚本），恢复量产调试宏`
 
-当前功能分支：`feature/cr008-passive-hid-hardening`。
+当前功能分支：`feature/cr008-passive-hid-hardening`。交接更新时 HEAD 为 `cd3b60e`，与 `origin/feature/cr008-passive-hid-hardening` 同步，工作区 clean。
 
 远程仓库：`https://github.com/LoH9721/bt_cs_soc_initiator.git`。
 
@@ -72,14 +79,11 @@ git -c https.proxy= -c http.proxy= -c http.version=HTTP/1.1 push
 
 ```c
 #define APP_KEY_ENABLE          0
-#define APP_NO_CAN_PHONE_DEBUG  1
+#define APP_NO_CAN_PHONE_DEBUG  0
+#define PHONE_PEPS_LEAVE_LOCK_ENABLE 1
 ```
 
-无 CAN 调试 VIN：
-
-`LSVAU2A38N2100001`
-
-`APP_NO_CAN_PHONE_DEBUG=1` 允许没有 CAN、IGN 和实时 VIN 的调试板完成扫码绑定和控制验证，但不会伪造车辆状态上报。该宏不是量产配置，进入 Release 前必须恢复为 `0` 并完成真实 CAN/VIN/IGN 回归。
+`APP_NO_CAN_PHONE_DEBUG=0` 已恢复量产取向；当前固件不再允许用固定 VIN 绕过 CAN、IGN 和实时 VIN。需要进行无 CAN 调试时，必须经单独确认后临时开启，并在结束前恢复为 `0`。`PHONE_PEPS_LEAVE_LOCK_ENABLE=1` 启用 CR009-004 的连接状态走远闭锁；设置为 `0` 时只保留 CR009-005 的断连闭锁兜底。
 
 ## 6. CR008 当前状态
 
@@ -181,19 +185,30 @@ CR008-006 授权 Bond 记录持久化（NVM 0x5520，28B+CRC16）
 - CR008-007：完整拒绝/超时/合法重绑定矩阵（部分场景已有实机通过记录）；
 - CR008-009：未授权连接不得输出有效区域或自动解锁；1500ms `STALE` 超时；新连接首个 RSSI 前不得复用旧距离。
 
-## 10. 已知风险与不要做的事情
+## 10. CR009 当前实施状态
+
+- CR009-001（车辆条件门控）：已编译，待实机验证静默、门/尾门开着抑制，以及全关后的断连闭锁回归。
+- CR009-004（连接状态走远闭锁）：代码已提交，尚无用户确认的编译或实机证据。仅在授权链路、解锁状态、非静默、门/尾门全关、且已取得“任一门开→所有门关”资格后，进入约 15m 无效区才请求闭锁；闭锁一次后消耗资格。
+- CR009-005（断连闭锁兜底）：已编译，待实机验证。断开前必须已有远区证据；车旁闪断不应闭锁，远区断连持续 5s 应闭锁，5s 内重连应取消。
+- CR009-006（自动解锁额度语义）：已编译并完成用户确认的实机测试。自动解锁额度仅限制自动解锁，不再阻断断连闭锁。
+- CR009-002、003、008、009 已取消；CR009-007 仍是候选，不得直接修改代码。
+
+实现与测试细节分别见 `docs/CR009_CHANGE_RECORD.md`、`docs/CR009_PHONE_PEPS_AUTO_LOCK_PLAN.md` 和 `docs/CR009_USAGE_GUIDE.md`；逐项实时状态以 `docs/CR_STATUS.md` 为准。
+
+## 11. 已知风险与不要做的事情
 
 - 不要把“Bond 表非空”当作当前连接已授权。
 - 不要把 HID 连接本身当作业务身份认证。
 - 不要在任意 `0x1205` 事件中自动删除 Bond；未经业务认证的设备可能借此造成拒绝服务。
 - 不要在 PREPARE 阶段删除旧 Bond；用户取消或 APP 异常会破坏原本可用的自动重连。
 - 不要直接修改生成的 GATT 数据库；当前 Appearance/Report Map 已确认正确。
-- 不要把 `APP_NO_CAN_PHONE_DEBUG=1` 的固件用于量产或真实车辆验收。
+- 不要为方便调试而将 `APP_NO_CAN_PHONE_DEBUG=1` 的固件用于量产或真实车辆验收；当前值必须保持为 `0`。
 - CR008-001～010 已提交并推送到功能分支；恢复工作时先确认当前分支和工作区，不要 reset、checkout 或覆盖用户修改。
 - CR008-009 的 1500ms 测距新鲜度是运行期判据，不改变 RSSI 算法和 300ms 轮询；首次区域直接为解锁区时不自动解锁，属既有策略。
 - CR008-010 自动落锁只接受授权 Passive L4 断开事件；未授权连接、L1 断开、Passive OFF 断开和 PREPARE/READY 主动切换都不触发闭锁。
+- CR009-004/005 的实机验证尚未完成，特别是门资格、折回、门/尾门打开、车旁闪断、远区断连与重连取消组合场景不得凭代码或编译结果标记为通过。
 
-## 11. 新窗口恢复提示词
+## 12. 新窗口恢复提示词
 
 可在明天的新窗口直接发送：
 
@@ -204,19 +219,15 @@ D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\PROJECT_HANDOFF.md
 同时只读检查：
 D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR008_PASSIVE_HID_HARDENING_PLAN.md
 D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR008_CHANGE_RECORD.md
-D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\GIT_COMMIT_GUIDE.md
+D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR009_PHONE_PEPS_AUTO_LOCK_PLAN.md
+D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR009_CHANGE_RECORD.md
+D:\myProject\20260817\bt_cs_soc_initiator_slc_failed_backup\docs\CR009_USAGE_GUIDE.md
 
-当前分支为 feature/cr008-passive-hid-hardening。CR008-001～010 的代码和文档已经提交并推送到 origin/feature/cr008-passive-hid-hardening。最新已知提交包括 da29044（CR008-006～010 代码）和 eb73355（项目文档与 Git 指南）。
+当前分支为 feature/cr008-passive-hid-hardening。交接更新时 HEAD 为 cd3b60e，已与 origin/feature/cr008-passive-hid-hardening 同步。CR009-001 已 BUILT、004 已 CODED、005 已 BUILT、006 已 TESTED；不要将尚未有用户实机确认的 001/004/005 标为 TESTED。
 
-当前 CR008-001～005 已完成；CR008-006 已完成取消、PREPARE 超时和错误 PIN 等负向实测，但授权记录提交/清除/重启恢复仍需补测；CR008-007 已有系统蓝牙直接配对拒绝、观察窗口超时和 APP 场景实机日志，完整回归矩阵仍需补齐；CR008-008、010 已实机验证；CR008-009 编译和正向通过、负向待补测。
+当前优先项为：先编译并实机验证 CR009-004；再补测 CR009-001、005；随后完成 CR008-013 编译/实机验证及 CR008-006、007、009 的剩余矩阵。CR008-011、012 仍暂停。
 
-先不要修改代码，也不要编译。先只读检查 Git 状态、上述文档以及 CR008-011 涉及的固定 PIN、PIN 日志、Release/Debug 配置代码，然后告诉我：
-1. 当前固定 PIN 的来源、设置和打印位置；
-2. CR008-011 的必要性与不修改的风险；
-3. 最小严格版本和完整版本的区别；
-4. 推荐方案、影响范围、与 CR008-001～010 的冲突检查；
-5. 预计修改的文件和函数位置；
-6. 每项可执行的编译与实机验证方法。
+先不要修改代码。先只读检查 Git 状态、CR009-004/005 的文件与函数位置、当前配置和测试矩阵；说明编译与实机验证顺序、前后对比方法、与 CR008-009/010 及 CR009-001/006 的回归关系。
 
-等我确认方案后再修改。一个 CR 一个 CR 来，我自己负责编译和实机测试；正式修改后必须告诉我改了哪些文件和位置、如何前后对比测试。完成验证后按现有 Git 流程提交并推送，不修改串口调试接口。
+我自己负责编译和实机测试；未经明确反馈不得虚构验证结果。一个 CR 一个 CR 来，正式修改后必须说明改动文件和位置、前后对比测试方法；未经明确要求不执行 Git 提交或推送，也不修改串口调试接口。
 ```

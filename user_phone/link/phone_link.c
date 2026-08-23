@@ -329,6 +329,30 @@ void phone_link_on_bt_event(sl_bt_msg_t *evt)
   switch (SL_BT_MSG_ID(evt->header)) {
 
     case sl_bt_evt_system_boot_id: {
+      /* 仅诊断：读取 Bluetooth Core（工具配置）当前生效的全局 TX 功率，
+       * 不修改任何功率设置。单位均为 0.1 dBm / 0.1 dB。 */
+      {
+        int16_t support_min;
+        int16_t support_max;
+        int16_t set_min;
+        int16_t set_max;
+        int16_t rf_path_gain;
+        sl_status_t power_sc = sl_bt_system_get_tx_power_setting(&support_min,
+                                                                   &support_max,
+                                                                   &set_min,
+                                                                   &set_max,
+                                                                   &rf_path_gain);
+        if (power_sc == SL_STATUS_OK) {
+          USER_LOG_INFO("[PHONE] TX power: support=[%d,%d], set=[%d,%d] (0.1dBm), rf_path_gain=%d (0.1dB)" USER_LOG_NL,
+                        (int)support_min, (int)support_max,
+                        (int)set_min, (int)set_max,
+                        (int)rf_path_gain);
+        } else {
+          USER_LOG_ERROR("[PHONE] get_tx_power_setting failed 0x%04lX" USER_LOG_NL,
+                         (unsigned long)power_sc);
+        }
+      }
+
       sl_status_t sc = sl_bt_advertiser_create_set(&phone_link_adv_handle);
       if (sc != SL_STATUS_OK) {
         USER_LOG_ERROR("[PHONE] advertiser_create_set failed 0x%04lX" USER_LOG_NL, (unsigned long)sc);
