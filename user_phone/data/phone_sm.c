@@ -3708,6 +3708,26 @@ static void phone_sm_deferred_ecdsa_poll(void)
       /* 缓存远程命令 (供 CAN 桥接消费) */
       g_pending_control_cmd = control_cmd;
 
+#if APP_NO_CAN_PHONE_DEBUG
+      /* DBG-NOCAN-002: 无 CAN 调试时模拟 VIU 的最终锁状态反馈，便于 APP
+       * 验证控制响应和 STATE_CHANGED_EVENT。仅 LOCK/UNLOCK 更新状态；
+       * FIND_CAR 不改变车辆锁状态。 */
+      switch (control_cmd) {
+        case PHONE_CONTROL_CMD_UNLOCK:
+          phone_sm_notify_vehicle_lock_state(PHONE_LOCK_STATE_UNLOCKED);
+          USER_LOG_INFO("[DEBUG] NO-CAN simulate vehicle lock state: UNLOCKED" USER_LOG_NL);
+          break;
+
+        case PHONE_CONTROL_CMD_LOCK:
+          phone_sm_notify_vehicle_lock_state(PHONE_LOCK_STATE_LOCKED);
+          USER_LOG_INFO("[DEBUG] NO-CAN simulate vehicle lock state: LOCKED" USER_LOG_NL);
+          break;
+
+        default:
+          break;
+      }
+#endif
+
       /* 发送加密响应 */
       {
         uint8_t payload[256];

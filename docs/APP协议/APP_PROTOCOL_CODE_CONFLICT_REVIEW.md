@@ -120,6 +120,21 @@ V1.2 第 4 章规定 RX 为 `Write With Response`。当前配置位于 `config/b
 1. 将 GATT 增加/改为 `write`，使代码服从协议；或
 2. 正式修订协议，明确允许 `Write Without Response`，并补充 APP 侧发送可靠性、流控和错误恢复要求。
 
+### C-003：AUTH 两步字段分配 — 协议与当前代码差异、验证观察
+
+V1.1 与 V1.2 的 AUTH 字段分配一致；当前代码与两份协议的共同基线不同：
+
+| 命令 | 协议 V1.1 / V1.2 的 Request 必选字段 | 当前代码的 Request 必选字段 | 差异 |
+|---|---|---|---|
+| `0x20 AUTH_CHALLENGE_REQ` | `appKeyId` | `appKeyId`、`nonceA`、`appEcdhPublicKey` | 当前代码额外要求 `nonceA`、`appEcdhPublicKey`。 |
+| `0x21 AUTH_CHALLENGE_RSP` | `appKeyId`、`authSessionId`、`challengeId`、`nonceA`、`appEcdhPublicKey`、`appCounter`、`appSignature` | `appKeyId`、`authSessionId`、`challengeId`、`appCounter`、`appSignature` | 当前代码缺少 `nonceA`、`appEcdhPublicKey`。 |
+
+字段本身、长度和后续 ECDH/签名输入在两侧没有变化；差异仅是 `nonceA` 与 `appEcdhPublicKey` 所在请求报文不同。
+
+用户验证观察：曾将代码按上述协议字段分配迁移后，APP 无法完成蓝牙业务连接，因此代码已还原为当前历史字段分配。该反馈尚不能单独证明是 BLE 物理连接、CCCD/Notify、`0x20`/`0x21` TLV 组包、签名输入或 APP 兼容性中的哪一环导致；在未获取 APP 抓包与 BG24 串口日志前，C-003 保持“待确认”，不得据此将协议或代码任一侧判定为错误。
+
+下次定位应保留同一次尝试的 `connection_opened`、CCCD 使能、`0x20` Request/Response、`0x21` Request/Response 和 AUTH 失败日志，以区分“未建立 BLE 连接”与“已连接但认证失败”。
+
 ## 6. V1.2 已明确对齐的部分
 
 以下内容从静态实现上与 V1.2 基本一致，但仍需要 APP+BG24 真机互操作验证：
