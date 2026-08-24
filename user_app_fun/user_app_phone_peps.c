@@ -94,6 +94,7 @@ static int8_t   g_range_fresh_last;            /* -1=未记录 0=过期 1=新鲜
 #if PHONE_PEPS_LEAVE_LOCK_ENABLE
 static bool    g_leave_lock_qualified;         /* CR009-004: 离车闭锁资格 (解锁+任一门开到所有门关后有效) */
 static uint8_t g_prev_door_status;             /* CR009-004: 上一帧门状态 (任一门开到所有门关边沿检测) */
+static uint8_t g_prev_lock_state;               /* CR009-004: 上一帧真实车辆锁状态 (资格撤销边沿检测) */
 #endif
 
 /* 记录每个阈值对是否从 EEPROM 加载 (用于 phone_zone 命令显示来源) */
@@ -332,6 +333,7 @@ void user_app_phone_peps_init(void)
 #if PHONE_PEPS_LEAVE_LOCK_ENABLE
     g_leave_lock_qualified = false;
     g_prev_door_status = 0U;
+    g_prev_lock_state = PHONE_LOCK_STATE_UNKNOWN;
 #endif
 
     USER_LOG_INFO("[PHONE_PEPS] init done (debounce=%d cooldown=%ums)" USER_LOG_NL,
@@ -393,6 +395,7 @@ void user_app_phone_peps_process(void)
         g_cmd_cooldown_ms  = 0;
 #if PHONE_PEPS_LEAVE_LOCK_ENABLE
         g_leave_lock_qualified = false;
+        g_prev_lock_state = PHONE_LOCK_STATE_UNKNOWN;
 #endif
 
         /* CR008-010: 只有断开前确认的授权 Passive L4 链路才能启动计时。
@@ -447,6 +450,18 @@ void user_app_phone_peps_process(void)
     }
 
 #if PHONE_PEPS_LEAVE_LOCK_ENABLE
+    /* CR009-004: 任意来源的实际锁状态切换都结束当前离车周期。
+     * 不按区域切换撤销资格，避免车内→解锁区的正常离车路径丢失资格。 */
+    if ((g_prev_lock_state == (uint8_t)PHONE_LOCK_STATE_LOCKED
+         && lock_state == (uint8_t)PHONE_LOCK_STATE_UNLOCKED)
+        || (g_prev_lock_state == (uint8_t)PHONE_LOCK_STATE_UNLOCKED
+            && lock_state == (uint8_t)PHONE_LOCK_STATE_LOCKED)) {
+        g_leave_lock_qualified = false;
+        USER_LOG_INFO("[PHONE_PEPS] CR009-004 leave-lock qualification cleared: lock %u->%u" USER_LOG_NL,
+                      (unsigned)g_prev_lock_state, (unsigned)lock_state);
+    }
+    g_prev_lock_state = lock_state;
+
     /* CR009-004: 任一门开到所有门关闭边沿 + 车辆已解锁 → 建立离车闭锁资格 */
     if (g_prev_door_status != 0U
         && door_status == 0U
@@ -497,14 +512,6 @@ void user_app_phone_peps_process(void)
     if (g_debounce_cnt >= PHONE_PEPS_DEBOUNCE_COUNT) {
 
         if (g_pending_zone != g_current_zone) {
-
-#if PHONE_PEPS_LEAVE_LOCK_ENABLE
-            /* CR009-004: 回到解锁区/车内 → 撤销离车闭锁资格 (无新门动作不恢复) */
-            if (g_pending_zone == (uint8_t)APP_PROTO_ZONE_OUTSIDE_UNLOCK
-                || g_pending_zone == (uint8_t)APP_PROTO_ZONE_IN_CAR) {
-                g_leave_lock_qualified = false;
-            }
-#endif
 
             USER_LOG_INFO("[PHONE_PEPS] %s -> %s (dist=%u cm)" USER_LOG_NL,
                           g_zone_names[g_current_zone],
@@ -562,12 +569,6 @@ void user_app_phone_peps_process(void)
                     }
 #endif
                     if (cmd != 0) {
-#if PHONE_PEPS_LEAVE_LOCK_ENABLE
-                        if (cmd == (uint8_t)APP_PROTO_REMOTE_CMD_LOCK) {
-                            /* CR009-004: 资格消耗, 本周期只区域闭锁一次 */
-                            g_leave_lock_qualified = false;
-                        }
-#endif
                         g_auto_cmd_pending = cmd;
                         g_cmd_cooldown_ms  = (uint32_t)now_ms
                                            + PHONE_PEPS_AUTO_CMD_COOLDOWN_MS;
@@ -635,6 +636,7 @@ void user_app_phone_peps_on_disconnected(void)
 #if PHONE_PEPS_LEAVE_LOCK_ENABLE
     g_leave_lock_qualified = false;
     g_prev_door_status = 0U;
+    g_prev_lock_state = PHONE_LOCK_STATE_UNKNOWN;
 #endif
 
     USER_LOG_DEBUG("[PHONE_PEPS] disconnected" USER_LOG_NL);
